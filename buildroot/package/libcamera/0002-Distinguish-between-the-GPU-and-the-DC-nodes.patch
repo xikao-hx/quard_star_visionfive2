@@ -1,0 +1,32 @@
+From d408d9c51c77db7988badad79ebfa51a7875b667 Mon Sep 17 00:00:00 2001
+From: Changhuang Liang <changhuang.liang@starfivetech.com>
+Date: Wed, 27 Mar 2024 14:56:30 +0800
+Subject: [PATCH] Distinguish between the GPU and the DC nodes
+
+Skip /dev/dri/card* node if it GPU node.
+
+Signed-off-by: Changhuang Liang <changhuang.liang@starfivetech.com>
+---
+ src/apps/cam/drm.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/apps/cam/drm.cpp b/src/apps/cam/drm.cpp
+index 8779a713..a5f865cf 100644
+--- a/src/apps/cam/drm.cpp
++++ b/src/apps/cam/drm.cpp
+@@ -479,8 +479,10 @@ int Device::openCard()
+ 			continue;
+ 		}
+ 
+-		found = true;
+-		break;
++		if (cap) {
++			found = true;
++			break;
++		}
+ 	}
+ 
+ 	closedir(folder);
+-- 
+2.34.1
+

@@ -1,0 +1,52 @@
+Fix omxmjpegdec default framerate invalid.
+
+Signed-off-by: Leo Lu <leo.lu@starfivetech.com>
+
+diff -purN a/omx/gstomxmjpegdec.c b/omx/gstomxmjpegdec.c
+--- a/omx/gstomxmjpegdec.c	2024-06-17 10:46:11.962932805 +0800
++++ b/omx/gstomxmjpegdec.c	2024-06-17 10:33:50.068255067 +0800
+@@ -29,7 +29,7 @@
+ GST_DEBUG_CATEGORY_STATIC (gst_omx_mjpeg_dec_debug_category);
+ #define GST_CAT_DEFAULT gst_omx_mjpeg_dec_debug_category
+ #ifdef USE_OMX_TARGET_STARFIVE
+-#define DEFAULT_FRAMERATE                0
++#define DEFAULT_FRAMERATE                25
+ #define DEFAULT_MIRROR                   0
+ #define DEFAULT_ROTATION                 0
+ #define DEFAULT_SCALEH                   0
+@@ -171,8 +171,8 @@ gst_omx_mjpeg_dec_class_init (GstOMXMJPE
+         "Framerate",
+         "Frames per second in raw stream.\n                \
+          Only workable for the container not exposing fps.\n\
+-                         '0' means disabled.",
+-         25, G_MAXINT,
++                         Default framerate 25 fps",
++         0, G_MAXINT,
+          DEFAULT_FRAMERATE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+ #endif
+   g_object_class_install_property (gobject_class, PROP_MIRROR,
+@@ -240,7 +240,15 @@ gst_omx_mjpeg_dec_set_format (GstOMXVide
+   GstVideoInfo *info = &state->info;
+   GstOMXMJPEGDec * mjpeg_dec = GST_OMX_MJPEG_DEC (dec);
+ 
+-  if (mjpeg_dec->framerate != DEFAULT_FRAMERATE) {
++  if (mjpeg_dec->framerate == 0 || mjpeg_dec->framerate == DEFAULT_FRAMERATE ) {
++    GST_DEBUG_OBJECT (dec, " change fps from %d/%d to %d/1" GST_PTR_FORMAT, info->fps_n, info->fps_d, mjpeg_dec->framerate);
++    info->fps_n = DEFAULT_FRAMERATE;
++    info->fps_d = 1;
++    if (state->caps) {
++      gst_caps_set_simple (state->caps, "framerate", GST_TYPE_FRACTION, info->fps_n, info->fps_d, NULL);
++    }
++  }
++  else if (mjpeg_dec->framerate != DEFAULT_FRAMERATE) {
+     GST_DEBUG_OBJECT (dec, " change fps from %d/%d to %d/1" GST_PTR_FORMAT, info->fps_n, info->fps_d, mjpeg_dec->framerate);
+     info->fps_n = mjpeg_dec->framerate;
+     info->fps_d = 1;
+@@ -248,6 +256,7 @@ gst_omx_mjpeg_dec_set_format (GstOMXVide
+       gst_caps_set_simple (state->caps, "framerate", GST_TYPE_FRACTION, info->fps_n, info->fps_d, NULL);
+     }
+   }
++  
+ #endif
+   if (!gst_omx_jpegdec_set_mirror (dec))
+     return FALSE;
