@@ -164,10 +164,25 @@ out:
 void quard_ipi_mailbox_handle(void)
 {
 	unsigned long msg_type = 0;
+	unsigned long pending_type = 0;
+	int ret;
 
-	/* OpenSBI copies the AMP message type here and clears SSIP. */
-	if (sbi_clear_ipi_amp(&msg_type) != 0)
+	/*
+	 * The platform can reassert SSIP after the AMP ecall returns, so retain
+	 * the architectural clear required by the FreeRTOS scheduler.  Read the
+	 * AMP bits once more afterwards: if that clear raced with a newly arrived
+	 * mailbox IPI, the second atomic exchange consumes its message instead of
+	 * leaving it stranded without SSIP.
+	 */
+	ret = sbi_clear_ipi_amp(&msg_type);
+	sbi_clear_ipi();
+	if (ret != 0) {
+		/* The standard clear above handles a normal FreeRTOS yield. */
 		return;
+	}
+
+	if (sbi_clear_ipi_amp(&pending_type) == 0)
+		msg_type |= pending_type;
 
 	if (msg_type & (1UL << IPI_MB_TYPE_TX))
 		ipi_mailbox_process(IPI_MB_TYPE_TX);

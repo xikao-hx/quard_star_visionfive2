@@ -192,6 +192,8 @@ void handle_interrupt(void)
     if (irq == 0) {
         return;
     }
+    
+    isr_nesting++;
 
     // LOG_D("irq: %d\n",irq);
     

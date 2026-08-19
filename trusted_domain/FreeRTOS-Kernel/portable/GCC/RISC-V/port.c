@@ -164,7 +164,7 @@ extern void xPortStartFirstTask( void );
     /* 使能SIE中S模式Timer中断和Soft中断，注意此处使能并不会立即响应
 	xPortStartFirstTask中将打开全局使能 */
     csr_set(CSR_SIE, SIP_STIP);
-    csr_set(CSR_SIE, SIP_SSIP);
+	csr_set(CSR_SIE, SIP_SSIP);
 
 	xPortStartFirstTask();
 
