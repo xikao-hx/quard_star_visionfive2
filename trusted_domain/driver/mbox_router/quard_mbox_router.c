@@ -34,12 +34,7 @@ int quard_router_send_msg(struct quard_mbox_consumer *consumer,
 
 	msg->header.fields.quard_server_id = cfg->server_id;
 	ret = mbox_send_message(consumer->router->tx_chan, (void*)msg);
-	if (ret < 0) {
-		LOG_E("server %s send msg failed", consumer->name);
-		return -EINVAL;
-	}
-
-	return 0;
+	return ret;
 }
 
 int quard_router_send_msg_shell(struct quard_mbox_consumer *consumer,
@@ -51,12 +46,7 @@ int quard_router_send_msg_shell(struct quard_mbox_consumer *consumer,
 
 	msg->header.fields.quard_server_id = cfg->server_id;
 	ret = mbox_send_message(consumer->router->tx_chan, (void *)msg);
-	if (ret < 0) {
-		LOG_E("[Error]: server %s send msg failed\n", consumer->name);
-		return -EINVAL;
-	}
-
-	return 0;
+	return ret;
 }
 
 int quard_mbox_consumer_register(struct quard_mbox_consumer *consumer)
@@ -197,9 +187,7 @@ static void init_quard_mbox(struct quard_mbox_router *router)
 	rx_cl.rx_callback = router_rx_notify;
 	router->rx_chan = mbox_request_channel((enum mbox_type)cfg->mbox_type, &rx_cl);
 
-	if ((router->tx_chan != NULL) && (router->rx_chan != NULL)) {
-		LOG_D("Router mbox init done.");
-	} else {
+	if ((router->tx_chan == NULL) || (router->rx_chan == NULL)) {
 		LOG_E("% fail", __func__);
 	} 
 }
@@ -208,7 +196,6 @@ void init_quard_mbox_router(void)
 {
 	int i;
 
-	LOG_I("%s enter", __func__);
 	for (i = 0; i < TOTAL_ROUTER_NUM; i ++)
 		init_quard_mbox(router_tab[i]);
 }

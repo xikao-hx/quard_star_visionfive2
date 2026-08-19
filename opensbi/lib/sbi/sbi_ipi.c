@@ -184,10 +184,16 @@ void sbi_ipi_clear_ext_ipi(unsigned long addr)
 	if (!amp_data_addr)
 		return;
 
+	/*
+	 * Clear SSIP before consuming the AMP message bits.  If a new AMP IPI
+	 * arrives after this clear, it is either consumed by the xchg below or
+	 * leaves SSIP pending for the next trap.  Doing this in the opposite
+	 * order can clear the SSIP belonging to a newly arrived message and
+	 * strand its message bit without an interrupt.
+	 */
+	sbi_ipi_clear_smode();
 	msg_type = atomic_raw_xchg_ulong(amp_data_addr + current_hartid(), 0);
 	*(unsigned long *)addr = msg_type;
-
-	sbi_ipi_clear_smode();
 }
 
 static void sbi_ipi_process_halt(struct sbi_scratch *scratch)

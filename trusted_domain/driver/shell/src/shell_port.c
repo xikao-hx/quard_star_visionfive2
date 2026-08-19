@@ -40,8 +40,12 @@ static StackType_t uxShellTaskStack[SHELL_STACK_SIZE];
 #if defined(UART_SHELL)  || defined(UART_REMOTE_SHELL)
 void send_shell_queue(char c)
 {
-	/* The RISC-V trap epilogue restores the selected task context. */
-	xQueueSendToBackFromISR(shell_rx_queue, &c, NULL);
+	BaseType_t high_pri_task_ready = pdFALSE;
+	xQueueSendToBackFromISR(shell_rx_queue, &c, &high_pri_task_ready);
+
+	if(high_pri_task_ready == pdTRUE) {
+		portYIELD_FROM_ISR(high_pri_task_ready);
+	}
 }
 #endif
 
@@ -194,10 +198,6 @@ signed short userShellRead(char *data, unsigned short len) {
  */
 void userShellInit(void) {
     shell_rx_queue = xQueueCreateStatic( QUEUE_LENGTH, ITEM_SIZE, ShellQueueStorageArea, &ShellStaticQueue );
-    if (shell_rx_queue == NULL) {
-        LOG_E("shell rx queue create failed");
-        return;
-    }
 
 #if defined(REMOTE_SHELL) || defined(UART_REMOTE_SHELL)
     remote_shell_agent();
