@@ -1,4 +1,7 @@
 #!/bin/bash
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+top_dir=$(cd "$script_dir/.." && pwd)
+cd "$top_dir"
 ##################################################################
 ##                                                              ##
 ##      SPDX-License-Identifier: GPL-2.0-or-later               ##
@@ -66,8 +69,8 @@ then
 	exit 1
 fi
 
-echo "./build_soft_3rdpart.sh >>  build.$tag.log"
-./build_soft_3rdpart.sh | tee -a build.$tag.log
+echo "./script/build_soft_3rdpart.sh >>  build.$tag.log"
+./script/build_soft_3rdpart.sh | tee -a build.$tag.log
 
 if (( $? > 0 ))
 then

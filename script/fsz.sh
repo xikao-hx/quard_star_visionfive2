@@ -21,7 +21,7 @@ function handle_file {
 
 if [ "$1" = "" -o "$1" = "--help" ]; then
 	echo "Add file size(32bits, Little Endian) before the content."
-	echo "Usage: ./fsz.sh <file>"
+	echo "Usage: ./script/fsz.sh <file>"
 	exit 1
 fi
 

@@ -1,5 +1,6 @@
 #!/bin/bash
-
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$(cd "$script_dir/.." && pwd)"
 ##################################################################
 ##                                                              ##
 ##      SPDX-License-Identifier: GPL-2.0-or-later               ##
@@ -18,17 +19,18 @@ COLOR_GREY="\033[1;30m"
 
 printf ${COLOR_GREEN}
 echo ""
-echo "post build copy images to release folder!"
-folder=~/release/`git describe`-`date -I`
-echo "create folder:$folder"
+echo "prepare for release build, make sure repo synced, working tree was clean"
+echo "please checking if proper tagged for release!"
+echo ""
 printf ${COLOR_NORMAL}
 
-mkdir -p $folder
-cp work/image.fit $folder/
-cp work/evb_fw_payload.img $folder/
-cp work/u-boot-spl.bin.normal.out $folder/
-cp work/initramfs.cpio.gz $folder/
-cp work/linux/arch/riscv/boot/Image.gz $folder/
-cp -rf work/linux/arch/riscv/boot/dts/starfive $folder/
-tree $folder
-echo ""
+git submodule sync --recursive
+git pull
+git submodule foreach "git pull"
+git branch && git status
+git submodule foreach "git branch && git status"
+
+printf $COLOR_GREEN
+git tag | grep JH7110_51
+git submodule foreach "git tag | grep JH7110_51"
+printf $COLOR_NORMAL

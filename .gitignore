@@ -19,3 +19,5 @@ etags
 # cscope files
 cscope.*
 ncscope.*
+buildroot/dl/
+rtthread

@@ -1,5 +1,7 @@
 #!/bin/bash
-TOP_DIR=$(pwd)
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TOP_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+cd "$TOP_DIR"
 
 # parse the args to install to initramfs or rootfs target path
 if [ $# -eq 0 ]; then

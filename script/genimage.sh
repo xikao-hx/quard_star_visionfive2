@@ -20,7 +20,7 @@ COLOR_RED="\033[1;31m"
 COLOR_GREY="\033[1;30m"
 HWBOARD=$1
 
-TOPDIR=`dirname $0`
+TOPDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUILD_DIR=$TOPDIR/work
 INPUT_DIR=$TOPDIR
 OUTPUT_DIR=$TOPDIR/work

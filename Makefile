@@ -51,6 +51,7 @@ endif
 vmlinux := $(linux_wrkdir)/vmlinux
 vmlinux_stripped := $(linux_wrkdir)/vmlinux-stripped
 vmlinux_bin := $(wrkdir)/vmlinux.bin
+amp_linux_dtb_target := starfive/jh7110-starfive-visionfive-2-amp.dtb
 module_install_path:=$(wrkdir)/module_install_path
 perf_tool_srcdir := $(linux_srcdir)/tools/perf
 perf_tool_wrkdir := $(linux_wrkdir)/tools/perf
@@ -91,7 +92,31 @@ qemu := $(qemu_wrkdir)/prefix/bin/qemu-system-riscv64
 
 uboot_srcdir := $(srcdir)/u-boot
 uboot_wrkdir := $(wrkdir)/u-boot
-rt_thread_wrkdir := $(srcdir)/rtthread/bsp/starfive/jh7110
+trusted_domain_srcdir := $(srcdir)/trusted_domain
+trusted_domain_builddir := $(ampwrkdir)/trusted_domain
+trusted_fw := $(trusted_domain_builddir)/trusted_fw.bin
+TRUSTED_CROSS_COMPILE ?= /opt/riscv/bin/riscv64-unknown-elf-
+trusted_fw_sources := $(shell find $(trusted_domain_srcdir) \
+	-path '*/build*' -prune -o -type f \( -name '*.c' -o -name '*.h' -o -name '*.S' -o -name '*.lds' -o -name 'Makefile' \) -print)
+
+# AMP runtime selection.  The final image name is intentionally the same for
+# both runtimes so the selected runtime is controlled only by this parameter.
+AMP_RTOS ?= freertos
+rtthread_srcdir := $(srcdir)/rtthread/bsp/starfive/jh7110
+rtthread_bin := $(ampwrkdir)/rtthread.bin
+RTTHREAD_SCONS ?= scons
+RTTHREAD_EXEC_PATH ?= /opt/riscv/bin
+RTTHREAD_CC_PREFIX ?= riscv64-unknown-elf-
+rtthread_sources := $(shell find $(srcdir)/rtthread/bsp/starfive -path '*/build*' -prune -o -type f \( -name '*.c' -o -name '*.h' -o -name '*.S' -o -name '*.lds' -o -name 'SConscript' -o -name 'SConstruct' -o -name 'rtconfig.py' \) -print)
+
+ifeq ($(AMP_RTOS),freertos)
+	amp_fw := $(trusted_fw)
+else ifeq ($(AMP_RTOS),rtthread)
+	amp_fw := $(rtthread_bin)
+else
+$(error AMP_RTOS must be freertos or rtthread, got '$(AMP_RTOS)')
+endif
+amp_runtime_state := $(ampwrkdir)/.amp-rtos-current
 uboot_amp_wrkdir := $(wrkdir)/amp/u-boot
 
 uboot_dtb_file := $(wrkdir)/u-boot/arch/riscv/dts/starfive_$(HWBOARD).dtb
@@ -102,13 +127,9 @@ uboot          := $(uboot_wrkdir)/u-boot.bin
 uboot_amp_orig := $(ampwrkdir)/u-boot/u-boot.bin
 uboot_amp      := $(ampwrkdir)/u-boot.bin
 ampsbi_wrkdir  := $(ampwrkdir)/opensbi
-rtos_file      := rtthread.bin
-rtos_elf       := rtthread.elf
-rtos_map       := rtthread.map
-amp_uboot_size := 1216K
-rtos_compile   := scons
-rtos_defconfig := vf2_defconfig
-rtos_boardfile := vf2_rtconfig.h
+# SPL board code copies the RTOS from CONFIG_SPL_OPENSBI_LOAD_ADDR + 0x330000.
+# Keep this padding offset in sync with starfive_jh7110-amp-u-boot.dtsi.
+amp_uboot_size := 3342336
 
 spl_tool_srcdir := $(srcdir)/soft_3rdpart/spl_tool
 spl_tool_wrkdir := $(wrkdir)/spl_tool
@@ -258,6 +279,24 @@ $(vmlinux): $(linux_srcdir) $(linux_wrkdir)/.config $(target_gcc)
 		INSTALL_MOD_PATH=$(module_install_path) \
 		modules_install
 
+linux_mailbox_modules_stamp := $(module_install_path)/.starfive_mailbox_modules
+linux_mailbox_sources := \
+	$(linux_srcdir)/drivers/mailbox/starfive_ipi_mailbox.c \
+	$(linux_srcdir)/drivers/mailbox/starfive_ipi_mailbox-test.c \
+	$(linux_srcdir)/drivers/mailbox/starfive_mailbox.c \
+	$(linux_srcdir)/drivers/mailbox/starfive_mailbox-test.c \
+	$(linux_srcdir)/drivers/mailbox/mailbox.h
+
+$(linux_mailbox_modules_stamp): $(linux_mailbox_sources) $(linux_wrkdir)/.config $(vmlinux)
+	$(MAKE) -C $(linux_srcdir) O=$(linux_wrkdir) \
+		ARCH=riscv CROSS_COMPILE=$(CROSS_COMPILE) PATH=$(RVPATH) \
+		M=$(linux_srcdir)/drivers/mailbox modules
+	$(MAKE) -C $(linux_srcdir) O=$(linux_wrkdir) \
+		ARCH=riscv CROSS_COMPILE=$(CROSS_COMPILE) PATH=$(RVPATH) \
+		INSTALL_MOD_PATH=$(module_install_path) \
+		M=$(linux_srcdir)/drivers/mailbox modules_install
+	touch $@
+
 vpudriver-build: $(vmlinux)
 	$(MAKE) -C $(buildroot_initramfs_wrkdir) O=$(buildroot_initramfs_wrkdir) \
 		INSTALL_MOD_PATH=$(module_install_path) wave511-extract
@@ -291,6 +330,12 @@ $(initramfs).d: $(buildroot_initramfs_sysroot)
 
 $(initramfs): $(buildroot_initramfs_sysroot) $(vmlinux) vpudriver-build $(version) $(perf_tool_wrkdir)/perf
 	cp -r $(module_install_path)/lib/modules $(buildroot_initramfs_sysroot)/lib/
+	# The NFS root is mounted directly at /mnt on the board.
+	if [ -f $(buildroot_initramfs_sysroot)/etc/init.d/S41nfs-root ]; then \
+		sed -i 's#NFS_MOUNT=/mnt/nfs_rootfs#NFS_MOUNT=/mnt#' \
+			$(buildroot_initramfs_sysroot)/etc/init.d/S41nfs-root; \
+	fi
+	rmdir $(buildroot_initramfs_sysroot)/mnt/nfs_rootfs 2>/dev/null || true
 ifeq ($(HWBOARD_CONFIG), debug)
 	cp $(perf_tool_wrkdir)/perf $(buildroot_initramfs_sysroot)/usr/bin/
 	cp $(version) $(buildroot_initramfs_sysroot)/usr/bin/version
@@ -310,6 +355,16 @@ $(vmlinux_stripped): $(vmlinux)
 $(vmlinux_bin): $(vmlinux)
 	PATH=$(RVPATH) $(target)-objcopy -O binary $< $@
 
+# The AMP FIT embeds this DTB directly. Keep it as an explicit prerequisite
+# so changes to the AMP DTS are picked up whenever ampfit is built.
+.PHONY: amp_linux_dtb
+amp_linux_dtb: $(vmlinux)
+	$(MAKE) -C $(linux_srcdir) O=$(linux_wrkdir) \
+		ARCH=riscv \
+		CROSS_COMPILE=$(CROSS_COMPILE) \
+		PATH=$(RVPATH) \
+		$(amp_linux_dtb_target)
+
 .PHONY: linux-menuconfig
 linux-menuconfig: $(linux_wrkdir)/.config
 	$(MAKE) -C $(linux_srcdir) O=$(dir $<) ARCH=riscv CROSS_COMPILE=$(CROSS_COMPILE) menuconfig
@@ -326,9 +381,9 @@ $(sbi_bin): $(uboot) $(vmlinux)
 	cd $(sbi_wrkdir) && O=$(sbi_wrkdir) CFLAGS="-mabi=$(ABI) -march=$(ISA)" ${MAKE} -C $(sbi_srcdir) CROSS_COMPILE=$(CROSS_COMPILE) \
 		PLATFORM=generic FW_PAYLOAD_PATH=$(uboot) FW_FDT_PATH=$(uboot_dtb_file) FW_TEXT_START=0x40000000
 
-$(fit): $(sbi_bin) $(vmlinux_bin) $(uboot) $(its_file) ${initramfs}
+$(fit): $(sbi_bin) $(vmlinux_bin) $(linux_wrkdir)/arch/riscv/boot/Image.gz $(uboot) $(its_file) ${initramfs}
 	$(uboot_wrkdir)/tools/mkimage -f $(its_file) -A riscv -O linux -T flat_dt $@
-	@if [ -f fsz.sh ]; then ./fsz.sh $(sbi_bin); fi
+	@if [ -f script/fsz.sh ]; then ./script/fsz.sh $(sbi_bin); fi
 
 $(libfesvr): $(fesvr_srcdir)
 	rm -rf $(fesvr_wrkdir)
@@ -392,22 +447,40 @@ $(spl_bin_normal_out): $(uboot) $(spl_tool_wrkdir)/spl_tool
 $(uboot_fit): $(sbi_bin) $(uboot_its_file) $(uboot)
 	$(uboot_wrkdir)/tools/mkimage -f $(uboot_its_file) -A riscv -O u-boot -T firmware $(uboot_fit)
 
-$(uboot_amp_orig): $(uboot_srcdir) $(target_gcc)
+$(trusted_fw): $(trusted_fw_sources)
+	mkdir -p $(trusted_domain_builddir)
+	$(MAKE) -C $(trusted_domain_srcdir) BOARD=visionfive2 \
+		CROSS_COMPILE=$(TRUSTED_CROSS_COMPILE) BUILD_DIR=$(trusted_domain_builddir) clean
+	$(MAKE) -C $(trusted_domain_srcdir) BOARD=visionfive2 \
+		CROSS_COMPILE=$(TRUSTED_CROSS_COMPILE) BUILD_DIR=$(trusted_domain_builddir)
+
+$(rtthread_bin): $(rtthread_sources)
+	cp $(rtthread_srcdir)/configs/vf2_defconfig $(rtthread_srcdir)/.config
+	cp $(rtthread_srcdir)/configs/vf2_rtconfig.h $(rtthread_srcdir)/rtconfig.h
+	cd $(rtthread_srcdir) && PATH=$(RTTHREAD_EXEC_PATH):$$PATH \
+		RTT_EXEC_PATH=$(RTTHREAD_EXEC_PATH) RTT_CC_PREFIX=$(RTTHREAD_CC_PREFIX) \
+		$(RTTHREAD_SCONS) -j$$(nproc)
+	cp $(rtthread_srcdir)/rtthread.bin $@
+
+.PHONY: amp_runtime_state_force
+amp_runtime_state_force:
+
+$(amp_runtime_state): amp_runtime_state_force
+	mkdir -p $(ampwrkdir)
+	if [ ! -f $@ ] || [ "$$(cat $@)" != "$(AMP_RTOS)" ]; then \
+		echo "$(AMP_RTOS)" > $@; \
+	fi
+
+$(uboot_amp_orig): $(uboot_srcdir) $(target_gcc) $(amp_fw) $(amp_runtime_state)
 	rm -rf $(uboot_amp_wrkdir)
 	mkdir -p $(uboot_amp_wrkdir)
 	mkdir -p $(dir $@)
 	$(MAKE) DEVICE_TREE=$(amp_dts) -C $(uboot_srcdir) O=$(uboot_amp_wrkdir) $(uboot_config)
 	$(MAKE) DEVICE_TREE=$(amp_dts) -C $(uboot_srcdir) O=$(uboot_amp_wrkdir) CROSS_COMPILE=$(CROSS_COMPILE)
-	cp $(rt_thread_wrkdir)/configs/$(rtos_defconfig) $(rt_thread_wrkdir)/.config
-	cp $(rt_thread_wrkdir)/configs/$(rtos_boardfile) $(rt_thread_wrkdir)/rtconfig.h
-	cd $(rt_thread_wrkdir) && $(rtos_compile) -c && $(rtos_compile)
-	cd -
-	cp $(rt_thread_wrkdir)/$(rtos_file) $(ampwrkdir)
-	cp $(rt_thread_wrkdir)/$(rtos_elf) $(ampwrkdir)
-	cp $(rt_thread_wrkdir)/$(rtos_map) $(ampwrkdir)
+	cp $(amp_fw) $(ampwrkdir)/amp_rtos.bin
 	cp $(uboot_amp_orig) $(uboot_amp)
 	truncate $(uboot_amp) -c -s $(amp_uboot_size)
-	cat $(ampwrkdir)/$(rtos_file) >> $(uboot_amp)
+	cat $(amp_fw) >> $(uboot_amp)
 
 $(ampsbi_bin): $(uboot_amp_orig)
 	rm -rf $(ampsbi_wrkdir)
@@ -420,9 +493,9 @@ $(ampuboot_fit): $(ampsbi_bin) $(uboot_amp_its_file) $(amp_uboot) $(spl_tool_wrk
 	cp $(uboot_amp_wrkdir)/spl/$(spl_bin_normal_out) $(wrkdir)/$(amp_spl_bin_normal_out)
 	$(uboot_amp_wrkdir)/tools/mkimage -f $(uboot_amp_its_file) -A riscv -O u-boot -T firmware $(ampuboot_fit)
 
-$(ampfit): $(ampsbi_bin) $(vmlinux_bin) $(ampuboot_fit) $(amp_its_file) ${initramfs}
+$(ampfit): $(ampsbi_bin) $(vmlinux_bin) $(linux_wrkdir)/arch/riscv/boot/Image.gz amp_linux_dtb $(ampuboot_fit) $(amp_its_file) ${initramfs}
 	$(uboot_wrkdir)/tools/mkimage -f $(amp_its_file) -A riscv -O linux -T flat_dt $@
-	@if [ -f fsz.sh ]; then ./fsz.sh $(sbi_bin); fi
+	@if [ -f script/fsz.sh ]; then ./script/fsz.sh $(sbi_bin); fi
 
 $(amp_vfat_image): $(ampfit) $(vfat_image)
 	cp $(vfat_image) $(amp_vfat_image)
@@ -587,14 +660,14 @@ format-rootfs-image: format-boot-loader
 
 .PHONY: sdimg img
 sdimg: $(buildroot_rootfs_ext)
-	@./genimage.sh visionfive2
+	@./script/genimage.sh visionfive2
 
 img: sdimg $(spl_tool_wrkdir)/spl_tool
 	$(spl_tool_wrkdir)/spl_tool -i -f $(wrkdir)/sdcard.img
 
 .PHONY: sd_amp amp_img
 sd_amp: $(buildroot_rootfs_ext) $(amp_vfat_image) $(img)
-	@./genimage.sh vf2-amp
+	@./script/genimage.sh vf2-amp
 
 amp_img: sd_amp $(spl_tool_wrkdir)/spl_tool
 	$(spl_tool_wrkdir)/spl_tool -i -f $(wrkdir)/sdcard_amp.img
