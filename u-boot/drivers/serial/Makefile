@@ -3,6 +3,8 @@
 # (C) Copyright 2006-2009
 # Wolfgang Denk, DENX Software Engineering, wd@denx.de.
 
+ccflags-y += -I$(srctree)/../common_inc/bsp
+
 ifdef CONFIG_SPL_BUILD
 
 ifeq ($(CONFIG_$(SPL_TPL_)BUILD)$(CONFIG_$(SPL_TPL_)DM_SERIAL),yy)

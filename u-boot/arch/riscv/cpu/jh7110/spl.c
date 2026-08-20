@@ -12,6 +12,8 @@
 
 #define CSR_U74_FEATURE_DISABLE	0x7c1
 
+void ns16550_ramlog_ddr_ready(void);
+
 int spl_soc_init(void)
 {
 	int ret;
@@ -28,6 +30,7 @@ int spl_soc_init(void)
 		debug("DRAM init failed: %d\n", ret);
 		return ret;
 	}
+	ns16550_ramlog_ddr_ready();
 
 	/*flash init*/
 	ret = uclass_get_device(UCLASS_SPI_FLASH, 0, &dev);

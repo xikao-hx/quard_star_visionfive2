@@ -23,8 +23,7 @@ int main(void)
     plicinit();
     plicinithart();
     serial_init();
-    serial_print("Hello FreeRTOS on VisionFive 2 (hart4)\r\n");
-    // log_rb_backend_init();
+    log_rb_backend_init();
     elog_init();
     elog_set_fmt(ELOG_LVL_INFO, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
     elog_set_fmt(ELOG_LVL_DEBUG, ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
@@ -32,9 +31,10 @@ int main(void)
     elog_start();
 
     init_quard_mbox_router();
+    soc_log_agent();
     userShellInit();
-    
-    LOG_I("Hello FreeRTOS!");
+
+    LOG_I("Hello FreeRTOS on VisionFive 2 (hart4)\n");
 
     enable_external_interrupt();
     vTaskStartScheduler();

@@ -25,7 +25,6 @@
  * Function: Portable interface for each platform.
  * Created on: 2015-04-28
  */
- 
 #include <elog.h>
 #include <FreeRTOS.h>
 #include <semphr.h>
@@ -132,7 +131,7 @@ static void elog_port_output_task(const char *log, size_t size)
     } else {
         uart_puts(log, size);
     }
-    
+
     Shell* current_shell = shellGetCurrent();
     if(current_shell != NULL)
         remote_shell = current_shell;
@@ -145,7 +144,7 @@ static void elog_port_output_task(const char *log, size_t size)
     }
 #endif
 
-    // log_rb_backend_output(log, size);
+    log_rb_backend_output(log, size);
 }
 
 /**
@@ -175,7 +174,7 @@ void elog_port_output(const char *log, size_t size) {
  * output lock
  */
 void elog_port_output_lock(void) {
-    
+
     /* add your code here */
     if (irq_is_in_isr()) {
         return;
@@ -190,7 +189,7 @@ void elog_port_output_lock(void) {
  * output unlock
  */
 void elog_port_output_unlock(void) {
-    
+
     /* add your code here */
     if (irq_is_in_isr()) {
         return;
@@ -207,7 +206,7 @@ void elog_port_output_unlock(void) {
  * @return current time
  */
 const char *elog_port_get_time(void) {
-    
+
     /* add your code here */
     static char time_buf[20];
 
@@ -231,7 +230,7 @@ const char *elog_port_get_time(void) {
  * @return current process name
  */
 const char *elog_port_get_p_info(void) {
-    
+
     /* add your code here */
     if (irq_is_in_isr()) {
         return "ISR";
@@ -247,7 +246,7 @@ const char *elog_port_get_p_info(void) {
  * @return current thread name
  */
 const char *elog_port_get_t_info(void) {
-    
+
     /* add your code here */
     if (irq_is_in_isr()) {
         return "ISR";

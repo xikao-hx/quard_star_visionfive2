@@ -14,12 +14,146 @@
 #include <reset.h>
 #include <serial.h>
 #include <watchdog.h>
+#include <cpu_func.h>
 #include <asm/global_data.h>
+#include <asm/cache.h>
 #include <linux/err.h>
 #include <linux/types.h>
 #include <asm/io.h>
+#include <quard_log.h>
 
 DECLARE_GLOBAL_DATA_PTR;
+
+#ifdef CONFIG_SPL_BUILD
+#define RAMLOG_ADDR \
+	(BL1_SBI_LOG_BUF_BASE_ADDR + SPL_LOG_BUF_OFFSET)
+#define RAMLOG_REGION_SIZE	SPL_LOG_BUF_SIZE
+#else
+#define RAMLOG_ADDR		UBOOT_LOG_BUF_BASE_ADDR
+#define RAMLOG_REGION_SIZE	UBOOT_LOG_BUF_SIZE
+#endif
+
+#ifdef CONFIG_SPL_BUILD
+/*
+ * JH7110 calls preloader_console_init() from board_init_f(), before the
+ * generic SPL entry code clears .bss.  Keep all pre-DDR logging state in
+ * the loadable image so the first console character sees initialized data.
+ */
+static char ramlog_early_buffer[SPL_RAMLOG_SIZE] __section(".data");
+static u32 ramlog_early_head __section(".data");
+static u32 ramlog_early_tail __section(".data");
+static bool ramlog_ddr_ready __section(".data");
+#endif
+
+static void ramlog_flush_range(unsigned long start, unsigned long size)
+{
+	unsigned long aligned_start = start & ~(ARCH_DMA_MINALIGN - 1);
+	unsigned long aligned_end = ALIGN(start + size, ARCH_DMA_MINALIGN);
+
+	flush_dcache_range(aligned_start, aligned_end);
+}
+
+static void ramlog_buffer_reset(void)
+{
+	struct ramlog_buffer *rb =
+		(struct ramlog_buffer *)(uintptr_t)RAMLOG_ADDR;
+
+	memset((void *)(uintptr_t)RAMLOG_ADDR, 0, RAMLOG_REGION_SIZE);
+	rb->size = RAMLOG_REGION_SIZE - sizeof(*rb);
+	rb->head = 0;
+	rb->tail = 0;
+	mb();
+	rb->magic = RAMLOG_MAGIC;
+	ramlog_flush_range(RAMLOG_ADDR, RAMLOG_REGION_SIZE);
+}
+
+static bool ramlog_buffer_valid(const struct ramlog_buffer *rb)
+{
+	u32 expected_size = RAMLOG_REGION_SIZE - sizeof(*rb);
+
+	return rb->magic == RAMLOG_MAGIC && rb->size == expected_size &&
+	       rb->size > 1 && rb->head < rb->size && rb->tail < rb->size;
+}
+
+static void ramlog_buffer_init(void)
+{
+	struct ramlog_buffer *rb =
+		(struct ramlog_buffer *)(uintptr_t)RAMLOG_ADDR;
+
+	if (!ramlog_buffer_valid(rb))
+		ramlog_buffer_reset();
+}
+
+static void ramlog_append_to_reserved_memory(char ch)
+{
+	struct ramlog_buffer *rb =
+		(struct ramlog_buffer *)(uintptr_t)RAMLOG_ADDR;
+	char *payload;
+	u32 next;
+
+	if (!ramlog_buffer_valid(rb))
+		ramlog_buffer_reset();
+
+	payload = (char *)(rb + 1);
+	payload[rb->tail] = ch;
+	ramlog_flush_range((unsigned long)&payload[rb->tail], 1);
+	mb();
+
+	next = rb->tail + 1;
+	if (next == rb->size)
+		next = 0;
+	rb->tail = next;
+	if (next == rb->head) {
+		rb->head++;
+		if (rb->head == rb->size)
+			rb->head = 0;
+	}
+	mb();
+	ramlog_flush_range((unsigned long)rb, sizeof(*rb));
+}
+
+#ifdef CONFIG_SPL_BUILD
+static void ramlog_append_early(char ch)
+{
+	u32 next = ramlog_early_tail + 1;
+
+	if (next == ARRAY_SIZE(ramlog_early_buffer))
+		next = 0;
+	ramlog_early_buffer[ramlog_early_tail] = ch;
+	ramlog_early_tail = next;
+	if (next == ramlog_early_head) {
+		ramlog_early_head++;
+		if (ramlog_early_head == ARRAY_SIZE(ramlog_early_buffer))
+			ramlog_early_head = 0;
+	}
+}
+
+/* Called by the JH7110 SPL immediately after the DDR controller is ready. */
+void ns16550_ramlog_ddr_ready(void)
+{
+	ramlog_ddr_ready = true;
+	ramlog_buffer_init();
+
+	while (ramlog_early_head != ramlog_early_tail) {
+		ramlog_append_to_reserved_memory(
+			ramlog_early_buffer[ramlog_early_head]);
+		ramlog_early_head++;
+		if (ramlog_early_head == ARRAY_SIZE(ramlog_early_buffer))
+			ramlog_early_head = 0;
+	}
+}
+#endif
+
+static void ramlog_append(char ch)
+{
+#ifdef CONFIG_SPL_BUILD
+	if (!ramlog_ddr_ready) {
+		ramlog_append_early(ch);
+		return;
+	}
+#endif
+	ramlog_append_to_reserved_memory(ch);
+}
 
 #define UART_LCRVAL UART_LCR_8N1		/* 8 data, 1 stop, no parity */
 #define UART_MCRVAL (UART_MCR_DTR | \
@@ -383,6 +517,7 @@ static int ns16550_serial_putc(struct udevice *dev, const char ch)
 	if (!(serial_in(&com_port->lsr) & UART_LSR_THRE))
 		return -EAGAIN;
 	serial_out(ch, &com_port->thr);
+	ramlog_append(ch);
 
 	/*
 	 * Call watchdog_reset() upon newline. This is done here in putc
@@ -522,6 +657,9 @@ int ns16550_serial_probe(struct udevice *dev)
 
 	com_port->plat = dev_get_plat(dev);
 	ns16550_init(com_port, -1);
+#ifndef CONFIG_SPL_BUILD
+	ramlog_buffer_init();
+#endif
 
 	return 0;
 }

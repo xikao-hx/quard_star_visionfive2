@@ -8,8 +8,11 @@
  */
 
 #include <sbi/riscv_io.h>
+#include <sbi/riscv_barrier.h>
 #include <sbi/sbi_console.h>
+#include <sbi/sbi_string.h>
 #include <sbi_utils/serial/uart8250.h>
+#include <quard_log.h>
 
 /* clang-format off */
 
@@ -45,6 +48,66 @@ static u32 uart8250_baudrate;
 static u32 uart8250_reg_width;
 static u32 uart8250_reg_shift;
 
+#define RAMLOG_ADDR \
+	(BL1_SBI_LOG_BUF_BASE_ADDR + SBI_LOG_BUF_OFFSET)
+#define RAMLOG_REGION_SIZE	SBI_LOG_BUF_SIZE
+
+static void ramlog_buffer_reset(void)
+{
+	struct ramlog_buffer *rb =
+		(struct ramlog_buffer *)(uintptr_t)RAMLOG_ADDR;
+
+	sbi_memset((void *)(uintptr_t)RAMLOG_ADDR, 0, RAMLOG_REGION_SIZE);
+	rb->size = RAMLOG_REGION_SIZE - sizeof(*rb);
+	rb->head = 0;
+	rb->tail = 0;
+	smp_wmb();
+	rb->magic = RAMLOG_MAGIC;
+}
+
+static bool ramlog_buffer_valid(const struct ramlog_buffer *rb)
+{
+	u32 expected_size = RAMLOG_REGION_SIZE - sizeof(*rb);
+
+	return rb->magic == RAMLOG_MAGIC && rb->size == expected_size &&
+	       rb->size > 1 && rb->head < rb->size && rb->tail < rb->size;
+}
+
+static void ramlog_buffer_init(void)
+{
+	struct ramlog_buffer *rb =
+		(struct ramlog_buffer *)(uintptr_t)RAMLOG_ADDR;
+
+	if (!ramlog_buffer_valid(rb))
+		ramlog_buffer_reset();
+}
+
+static void ramlog_append(char ch)
+{
+	struct ramlog_buffer *rb =
+		(struct ramlog_buffer *)(uintptr_t)RAMLOG_ADDR;
+	char *payload;
+	u32 next;
+
+	if (!ramlog_buffer_valid(rb))
+		ramlog_buffer_reset();
+
+	payload = (char *)(rb + 1);
+	payload[rb->tail] = ch;
+	smp_wmb();
+
+	next = rb->tail + 1;
+	if (next == rb->size)
+		next = 0;
+	rb->tail = next;
+	if (next == rb->head) {
+		rb->head++;
+		if (rb->head == rb->size)
+			rb->head = 0;
+	}
+	smp_wmb();
+}
+
 static u32 get_reg(u32 num)
 {
 	u32 offset = num << uart8250_reg_shift;
@@ -75,6 +138,7 @@ static void uart8250_putc(char ch)
 		;
 
 	set_reg(UART_THR_OFFSET, ch);
+	ramlog_append(ch);
 }
 
 static int uart8250_getc(void)
@@ -100,6 +164,7 @@ int uart8250_init(unsigned long base, u32 in_freq, u32 baudrate, u32 reg_shift,
 	uart8250_reg_width = reg_width;
 	uart8250_in_freq   = in_freq;
 	uart8250_baudrate  = baudrate;
+	ramlog_buffer_init();
 
 	if (uart8250_baudrate) {
 		bdiv = (uart8250_in_freq + 8 * uart8250_baudrate) /

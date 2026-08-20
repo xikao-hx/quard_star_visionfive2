@@ -69,6 +69,10 @@ initramfs := $(wrkdir)/initramfs.cpio.gz
 
 sbi_srcdir := $(srcdir)/opensbi
 sbi_wrkdir := $(wrkdir)/opensbi
+quard_log_header := $(srcdir)/common_inc/bsp/quard_log.h
+uboot_ramlog_source := $(srcdir)/u-boot/drivers/serial/ns16550.c
+uboot_ramlog_spl_hook := $(srcdir)/u-boot/arch/riscv/cpu/jh7110/spl.c
+opensbi_ramlog_source := $(srcdir)/opensbi/lib/utils/serial/uart8250.c
 
 sbi_bin := $(wrkdir)/opensbi/platform/generic/firmware/fw_payload.bin
 ampsbi_bin := $(ampwrkdir)/opensbi/platform/generic/firmware/fw_payload.bin
@@ -375,10 +379,11 @@ linux-menuconfig: $(linux_wrkdir)/.config
 #     For JH7110, need to specify the FW_TEXT_START to 0x40000000
 #     Otherwise, the fw_payload.bin downloading via jtag will not run.
 #     not affect the evb_fw_payload.img for its file has FW_TEXT_START
-$(sbi_bin): $(uboot) $(vmlinux)
+$(sbi_bin): $(uboot) $(vmlinux) $(opensbi_ramlog_source) $(quard_log_header)
 	rm -rf $(sbi_wrkdir)
 	mkdir -p $(sbi_wrkdir)
-	cd $(sbi_wrkdir) && O=$(sbi_wrkdir) CFLAGS="-mabi=$(ABI) -march=$(ISA)" ${MAKE} -C $(sbi_srcdir) CROSS_COMPILE=$(CROSS_COMPILE) \
+	cd $(sbi_wrkdir) && O=$(sbi_wrkdir) ${MAKE} -C $(sbi_srcdir) CROSS_COMPILE=$(CROSS_COMPILE) \
+		platform-cflags-y="-I$(srcdir)/common_inc/bsp" \
 		PLATFORM=generic FW_PAYLOAD_PATH=$(uboot) FW_FDT_PATH=$(uboot_dtb_file) FW_TEXT_START=0x40000000
 
 $(fit): $(sbi_bin) $(vmlinux_bin) $(linux_wrkdir)/arch/riscv/boot/Image.gz $(uboot) $(its_file) ${initramfs}
@@ -425,7 +430,7 @@ uboot-menuconfig: $(uboot_wrkdir)/.config
 	$(MAKE) -C $(uboot_srcdir) O=$(dir $<) CROSS_COMPILE=$(CROSS_COMPILE) ARCH=riscv savedefconfig
 	cp $(dir $<)defconfig $(uboot_defconfig)
 
-$(uboot): $(uboot_srcdir) $(target_gcc)
+$(uboot): $(uboot_srcdir) $(target_gcc) $(uboot_ramlog_source) $(uboot_ramlog_spl_hook) $(quard_log_header)
 	rm -rf $(uboot_wrkdir)
 	mkdir -p $(uboot_wrkdir)
 	mkdir -p $(dir $@)
@@ -471,7 +476,7 @@ $(amp_runtime_state): amp_runtime_state_force
 		echo "$(AMP_RTOS)" > $@; \
 	fi
 
-$(uboot_amp_orig): $(uboot_srcdir) $(target_gcc) $(amp_fw) $(amp_runtime_state)
+$(uboot_amp_orig): $(uboot_srcdir) $(target_gcc) $(amp_fw) $(amp_runtime_state) $(uboot_ramlog_source) $(uboot_ramlog_spl_hook) $(quard_log_header)
 	rm -rf $(uboot_amp_wrkdir)
 	mkdir -p $(uboot_amp_wrkdir)
 	mkdir -p $(dir $@)
@@ -482,10 +487,11 @@ $(uboot_amp_orig): $(uboot_srcdir) $(target_gcc) $(amp_fw) $(amp_runtime_state)
 	truncate $(uboot_amp) -c -s $(amp_uboot_size)
 	cat $(amp_fw) >> $(uboot_amp)
 
-$(ampsbi_bin): $(uboot_amp_orig)
+$(ampsbi_bin): $(uboot_amp_orig) $(opensbi_ramlog_source) $(quard_log_header)
 	rm -rf $(ampsbi_wrkdir)
 	mkdir -p $(ampsbi_wrkdir)
-	cd $(ampsbi_wrkdir) && O=$(ampsbi_wrkdir) CFLAGS="-mabi=$(ABI) -march=$(ISA)" ${MAKE} -C $(sbi_srcdir) CROSS_COMPILE=$(CROSS_COMPILE) \
+	cd $(ampsbi_wrkdir) && O=$(ampsbi_wrkdir) ${MAKE} -C $(sbi_srcdir) CROSS_COMPILE=$(CROSS_COMPILE) \
+		platform-cflags-y="-I$(srcdir)/common_inc/bsp" \
 		PLATFORM=generic FW_PAYLOAD_PATH=$(uboot_amp) FW_FDT_PATH=$(uboot_amp_dtb_file) FW_TEXT_START=0x40000000
 
 $(ampuboot_fit): $(ampsbi_bin) $(uboot_amp_its_file) $(amp_uboot) $(spl_tool_wrkdir)/spl_tool
@@ -494,8 +500,8 @@ $(ampuboot_fit): $(ampsbi_bin) $(uboot_amp_its_file) $(amp_uboot) $(spl_tool_wrk
 	$(uboot_amp_wrkdir)/tools/mkimage -f $(uboot_amp_its_file) -A riscv -O u-boot -T firmware $(ampuboot_fit)
 
 $(ampfit): $(ampsbi_bin) $(vmlinux_bin) $(linux_wrkdir)/arch/riscv/boot/Image.gz amp_linux_dtb $(ampuboot_fit) $(amp_its_file) ${initramfs}
-	$(uboot_wrkdir)/tools/mkimage -f $(amp_its_file) -A riscv -O linux -T flat_dt $@
-	@if [ -f script/fsz.sh ]; then ./script/fsz.sh $(sbi_bin); fi
+	$(uboot_amp_wrkdir)/tools/mkimage -f $(amp_its_file) -A riscv -O linux -T flat_dt $@
+	@if [ -f script/fsz.sh ]; then ./script/fsz.sh $(ampsbi_bin); fi
 
 $(amp_vfat_image): $(ampfit) $(vfat_image)
 	cp $(vfat_image) $(amp_vfat_image)

@@ -11,6 +11,7 @@
 #include "quard_mbox_router_consumer.h"
 #include "quard_soc_log.h"
 #include "uart.h"
+#include <string.h>
 
 /* TODO: 后面优化任务优先安排，并从配置文件中读取 */
 #define LOG_FLUSH_TASK_PRIORITY   4
@@ -165,6 +166,14 @@ static void log_flush_task(void *pvParameters)
 
 int log_rb_backend_init(void)
 {
+    (void)memset((void *)LOG_BUF_BASE, 0, MCU_LOG_BUF_SIZE);
+    LOG_BUF_BASE->head_magic = MAGIC_PATTERN;
+    LOG_BUF_BASE->middle_magic = MAGIC_PATTERN;
+    quard_ringbuffer_init((struct quard_ringbuffer *)&LOG_BUF_BASE->rb_ctrl,
+                          (uint8_t *)&LOG_BUF_BASE->buffer_first_byte,
+                          (int32_t)RB_SIZE);
+    __asm volatile ("fence rw, rw" ::: "memory");
+
     mst_cb = (slave_buffer_cb *)(&master_buf[0]);
     mst_cb->head_magic = 0xF1F11F1F;
     mst_cb->middle_magic = 0xF1F11F1F;
