@@ -8,8 +8,30 @@
 
 / {
 	reserved-memory {
-		rpmsg_share_mem: rpmsg-shmem {
-			reg = <0x0 0x6e400000 0x0 0x400000>;
+		/* Shared IPI mailbox transport: 2 channels in the first 64 bytes. */
+		ipi_mailbox_reserved: ipi-mailbox@6e402000 {
+			reg = <0x0 0x6e402000 0x0 0x2000>;
+			no-map;
+		};
+
+		mcu_log_reserved: mcu-log@6e404000 {
+			reg = <0x0 0x6e404000 0x0 0x2000>;
+			no-map;
+		};
+
+		uboot_log_reserved: uboot-log@6e406000 {
+			reg = <0x0 0x6e406000 0x0 0x2000>;
+			no-map;
+		};
+
+		bl1_sbi_log_reserved: bl1-sbi-log@6e408000 {
+			reg = <0x0 0x6e408000 0x0 0x2000>;
+			no-map;
+		};
+
+		nor_client_reserved: nor-shared@6e500000 {
+			reg = <0x0 0x6e500000 0x0 0x200000>;
+			no-map;
 		};
 
 		rtthread_reserved: rt@6e800000 {
@@ -55,12 +77,30 @@
 		mbox_router_service_vshell: service-vshell {
 			server-id = <1>;
 		};
+
+		mbox_router_service_log: service-log {
+			server-id = <0>;
+		};
+
+		mbox_router_service_flash: service-flash {
+			server-id = <2>;
+		};
 	};
 
 	remote_console0: remote-console {
 		compatible = "quard,remote_console";
 		device-name = "quard-freertos";
 		mbox-router-server = <&mbox_router_service_vshell>;
+		status = "okay";
+	};
+
+	log_device: log-device {
+		compatible = "quard,log_device";
+		memory-region = <&mcu_log_reserved>,
+				<&bl1_sbi_log_reserved>,
+				<&uboot_log_reserved>;
+		memory-region-names = "mcu", "bl1-sbi", "uboot";
+		mbox-router-server = <&mbox_router_service_log>;
 		status = "okay";
 	};
 };
@@ -82,6 +122,11 @@
 };
 
 &pcie1 {
+	status = "disabled";
+};
+
+/* Cadence QSPI and the onboard SPI NOR are owned by hart4 FreeRTOS. */
+&qspi {
 	status = "disabled";
 };
 
