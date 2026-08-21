@@ -20,4 +20,18 @@ etags
 cscope.*
 ncscope.*
 buildroot/dl/
+
+# current not upload 
 rtthread
+BL1
+ota_server
+basic_middleware
+tool
+nfs_rootfs
+
+# AI
+.vscode
+.codex
+.agents
+**/__pycache__/
+autotest

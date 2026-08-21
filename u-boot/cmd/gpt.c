@@ -21,6 +21,8 @@
 #include <part.h>
 #include <exports.h>
 #include <uuid.h>
+#include <mapmem.h>
+#include <u-boot/crc.h>
 #include <linux/ctype.h>
 #include <div64.h>
 #include <memalign.h>
@@ -30,6 +32,218 @@
 #include <stdlib.h>
 
 static LIST_HEAD(disk_partitions);
+
+#define NOR_GPT_SECTOR_SIZE	512U
+#define NOR_GPT_MAX_ENTRIES	128U
+
+static bool nor_gpt_guid_is_zero(const efi_guid_t *guid)
+{
+	int index;
+
+	for (index = 0; index < sizeof(guid->b); index++) {
+		if (guid->b[index])
+			return false;
+	}
+
+	return true;
+}
+
+static int nor_gpt_entry_name(const gpt_entry *entry, char *name,
+			      size_t name_size)
+{
+	size_t index;
+
+	for (index = 0; index < PARTNAME_SZ; index++) {
+		u16 character = le16_to_cpu((__le16)entry->partition_name[index]);
+
+		if (!character) {
+			name[index] = '\0';
+			return index ? 0 : -EINVAL;
+		}
+		if (character > 0x7f || !isprint(character) ||
+		    index + 1 >= name_size)
+			return -EINVAL;
+		name[index] = character;
+	}
+
+	return -EINVAL;
+}
+
+static int nor_gpt_validate_image(const u8 *image, ulong image_size)
+{
+	const legacy_mbr *mbr;
+	const struct partition *protective;
+	const gpt_header *header;
+	const gpt_entry *entries;
+	u8 header_copy[NOR_GPT_SECTOR_SIZE];
+	u32 header_size, header_crc, entry_count, entry_size, entry_crc;
+	u64 entry_lba, entry_offset, entry_bytes, entry_end;
+	u64 first_usable, last_usable, previous_end = 0;
+	u32 index, used_entries = 0;
+	bool have_previous = false;
+
+	if (image_size < 2 * NOR_GPT_SECTOR_SIZE) {
+		printf("NOR GPT: image is too small\n");
+		return -EINVAL;
+	}
+
+	mbr = (const legacy_mbr *)image;
+	protective = &mbr->partition_record[0];
+	if (le16_to_cpu(mbr->signature) != MSDOS_MBR_SIGNATURE ||
+	    protective->sys_ind != EFI_PMBR_OSTYPE_EFI_GPT ||
+	    le32_to_cpu(protective->start_sect) != 1) {
+		printf("NOR GPT: invalid protective MBR\n");
+		return -EINVAL;
+	}
+
+	header = (const gpt_header *)(image + NOR_GPT_SECTOR_SIZE);
+	if (le64_to_cpu(header->signature) != GPT_HEADER_SIGNATURE_UBOOT) {
+		printf("NOR GPT: invalid header signature\n");
+		return -EINVAL;
+	}
+	if (le32_to_cpu(header->revision) != GPT_HEADER_REVISION_V1) {
+		printf("NOR GPT: unsupported header revision\n");
+		return -EINVAL;
+	}
+
+	header_size = le32_to_cpu(header->header_size);
+	if (header_size != sizeof(*header) ||
+	    header_size > NOR_GPT_SECTOR_SIZE) {
+		printf("NOR GPT: invalid header size %u\n", header_size);
+		return -EINVAL;
+	}
+	memcpy(header_copy, header, header_size);
+	header_crc = le32_to_cpu(header->header_crc32);
+	((gpt_header *)header_copy)->header_crc32 = 0;
+	if (crc32(0, header_copy, header_size) != header_crc) {
+		printf("NOR GPT: header CRC32 mismatch\n");
+		return -EINVAL;
+	}
+
+	entry_lba = le64_to_cpu(header->partition_entry_lba);
+	entry_count = le32_to_cpu(header->num_partition_entries);
+	entry_size = le32_to_cpu(header->sizeof_partition_entry);
+	first_usable = le64_to_cpu(header->first_usable_lba);
+	last_usable = le64_to_cpu(header->last_usable_lba);
+	if (le32_to_cpu(header->reserved1) ||
+	    le64_to_cpu(header->my_lba) != GPT_PRIMARY_PARTITION_TABLE_LBA ||
+	    le64_to_cpu(header->alternate_lba) != last_usable ||
+	    entry_lba != 2 || entry_count == 0 ||
+	    entry_count > NOR_GPT_MAX_ENTRIES ||
+	    entry_size != sizeof(gpt_entry) ||
+	    first_usable != 0 || first_usable > last_usable ||
+	    last_usable > U64_MAX / NOR_GPT_SECTOR_SIZE ||
+	    le32_to_cpu(protective->nr_sects) !=
+		    min_t(u64, last_usable, U32_MAX)) {
+		printf("NOR GPT: invalid header geometry\n");
+		return -EINVAL;
+	}
+
+	if (entry_lba > U64_MAX / NOR_GPT_SECTOR_SIZE ||
+	    entry_count > U64_MAX / entry_size) {
+		printf("NOR GPT: entry geometry overflows\n");
+		return -EINVAL;
+	}
+	entry_offset = entry_lba * NOR_GPT_SECTOR_SIZE;
+	entry_bytes = (u64)entry_count * entry_size;
+	if (entry_offset > image_size ||
+	    entry_bytes > image_size - entry_offset) {
+		printf("NOR GPT: entry array exceeds image\n");
+		return -EINVAL;
+	}
+	entry_end = entry_offset + entry_bytes;
+	if (entry_end > image_size) {
+		printf("NOR GPT: invalid entry array end\n");
+		return -EINVAL;
+	}
+
+	entries = (const gpt_entry *)(image + entry_offset);
+	entry_crc = le32_to_cpu(header->partition_entry_array_crc32);
+	if (crc32(0, (const u8 *)entries, entry_bytes) != entry_crc) {
+		printf("NOR GPT: entry array CRC32 mismatch\n");
+		return -EINVAL;
+	}
+
+	for (index = 0; index < entry_count; index++) {
+		const gpt_entry *entry = &entries[index];
+		u64 first_lba, last_lba;
+		char name[PARTNAME_SZ + 1];
+
+		if (nor_gpt_guid_is_zero(&entry->partition_type_guid))
+			continue;
+		if (nor_gpt_guid_is_zero(&entry->unique_partition_guid) ||
+		    nor_gpt_entry_name(entry, name, sizeof(name))) {
+			printf("NOR GPT: invalid entry %u identity\n", index);
+			return -EINVAL;
+		}
+		first_lba = le64_to_cpu(entry->starting_lba);
+		last_lba = le64_to_cpu(entry->ending_lba);
+		if (first_lba < first_usable || first_lba > last_lba ||
+		    last_lba > last_usable ||
+		    le64_to_cpu((__le64)entry->attributes.raw) ||
+		    (have_previous && first_lba <= previous_end)) {
+			printf("NOR GPT: invalid entry %u LBA range\n", index);
+			return -EINVAL;
+		}
+		previous_end = last_lba;
+		have_previous = true;
+		used_entries++;
+	}
+	if (!used_entries) {
+		printf("NOR GPT: no partitions\n");
+		return -EINVAL;
+	}
+
+	printf("NOR GPT: header and entry CRC32 valid\n");
+	for (index = 0; index < entry_count; index++) {
+		const gpt_entry *entry = &entries[index];
+		u64 first_lba, last_lba, offset, size;
+		char name[PARTNAME_SZ + 1];
+
+		if (nor_gpt_guid_is_zero(&entry->partition_type_guid))
+			continue;
+		nor_gpt_entry_name(entry, name, sizeof(name));
+		first_lba = le64_to_cpu(entry->starting_lba);
+		last_lba = le64_to_cpu(entry->ending_lba);
+		offset = first_lba * NOR_GPT_SECTOR_SIZE;
+		size = (last_lba - first_lba + 1) * NOR_GPT_SECTOR_SIZE;
+		printf("NOR GPT: name=%s offset=0x%08llx size=0x%08llx\n",
+		       name, offset, size);
+	}
+	printf("NOR GPT: %u partition(s) valid\n", used_entries);
+
+	return 0;
+}
+
+static int do_nor_gpt(struct cmd_tbl *cmdtp, int flag, int argc,
+		      char *const argv[])
+{
+	phys_addr_t address;
+	ulong image_size;
+	char *end;
+	const u8 *image;
+	int ret;
+
+	if (argc != 3)
+		return CMD_RET_USAGE;
+
+	address = hextoul(argv[1], &end);
+	if (!end || *end) {
+		printf("NOR GPT: invalid address '%s'\n", argv[1]);
+		return CMD_RET_USAGE;
+	}
+	image_size = hextoul(argv[2], &end);
+	if (!end || *end || !image_size) {
+		printf("NOR GPT: invalid size '%s'\n", argv[2]);
+		return CMD_RET_USAGE;
+	}
+
+	image = map_sysmem(address, image_size);
+	ret = nor_gpt_validate_image(image, image_size);
+	unmap_sysmem(image);
+
+	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
+}
 
 /**
  * extract_env(): Expand env name from string format '&{env_name}'
@@ -1069,4 +1283,11 @@ U_BOOT_CMD(gpt, CONFIG_SYS_MAXARGS, 1, do_gpt,
 	" gpt swap mmc 0 foo bar\n"
 	" gpt rename mmc 0 3 foo\n"
 #endif
+);
+
+U_BOOT_CMD(nor_gpt, 3, 1, do_nor_gpt,
+	"validate and print a relocated NOR GPT image in memory",
+	"<addr> <size>\n"
+	" - validate protective MBR, GPT header/entry CRC32 and absolute NOR LBAs\n"
+	" - print all non-empty partitions; this command never writes SPI NOR"
 );
