@@ -32,11 +32,11 @@ int main(void)
 
     init_quard_mbox_router();
     soc_log_agent();
+    init_quard_nor_agent();
     userShellInit();
 
     LOG_I("Hello FreeRTOS on VisionFive 2 (hart4)\n");
 
-    enable_external_interrupt();
     vTaskStartScheduler();
 
     LOG_E("ERROR: Scheduler returned!");

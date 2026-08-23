@@ -193,11 +193,6 @@ static inline int intr_get(void)
     return (r_sstatus() & SSTATUS_SIE) != 0;
 }
 
-static inline void enable_external_interrupt(void)
-{
-    w_sie(r_sie() | SIE_SEIE);
-}
-
 static inline int cpuid(void)
 {
     return (int)r_tp();

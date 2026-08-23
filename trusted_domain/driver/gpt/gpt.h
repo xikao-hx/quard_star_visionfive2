@@ -43,7 +43,10 @@ typedef struct gpt_header {
 	unsigned int		part_crc;
 } __attribute__((packed)) gpt_header_t;
 
-int unicode_to_ascii(unsigned short *str_in, unsigned char *str_out);
-int parse_gpt_entry(gpt_header_t *header, struct quard_nor_info *pinfo);
+typedef int (*gpt_read_fn)(void *context, uint32_t offset, void *buffer,
+			   uint32_t length);
+
+int gpt_read_partitions(gpt_read_fn read_fn, void *context,
+			struct quard_nor_info *info);
 
 #endif /* GPT_H */
