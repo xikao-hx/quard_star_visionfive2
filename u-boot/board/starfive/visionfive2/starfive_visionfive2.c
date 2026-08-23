@@ -603,6 +603,31 @@ void *board_fdt_blob_setup(void)
 }
 
 #ifdef CONFIG_OF_BOARD_FIXUP
+static int disable_rtos_owned_qspi(void *fdt)
+{
+	int offset;
+	int child;
+	int err;
+
+	offset = fdt_node_offset_by_compatible(fdt, -1, "cdns,qspi-nor");
+	if (offset < 0)
+		return offset == -FDT_ERR_NOTFOUND ? 0 : offset;
+	if (!fdt_getprop(fdt, offset, "quard,rtos-owned", NULL))
+		return 0;
+
+	err = fdt_setprop_string(fdt, offset, "status", "disabled");
+	if (err)
+		return err;
+
+	fdt_for_each_subnode(child, fdt, offset) {
+		err = fdt_setprop_string(fdt, child, "status", "disabled");
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 int board_fix_fdt(void *fdt)
 {
 	int err;
@@ -613,6 +638,13 @@ int board_fix_fdt(void *fdt)
 	err = riscv_board_reserved_mem_fixup(fdt);
 	if (err < 0) {
 		printf("failed to fixup DT for reserved memory: %d\n", err);
+	}
+
+	err = disable_rtos_owned_qspi(fdt);
+	if (err < 0) {
+		printf("failed to disable RTOS-owned QSPI in U-Boot proper: %d\n",
+		       err);
+		return err;
 	}
 
 	if (vf2_board_type == 2 && emmc_size) {

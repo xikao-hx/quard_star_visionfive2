@@ -12,6 +12,48 @@
 #endif
 
 / {
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ipi_mailbox_reserved: ipi-mailbox@6e402000 {
+			reg = <0x0 0x6e402000 0x0 0x2000>;
+			no-map;
+		};
+
+		nor_agent_reserved: nor-agent@6e500000 {
+			reg = <0x0 0x6e500000 0x0 0x200000>;
+			no-map;
+		};
+	};
+
+	ipimb: ipi-mailbox@6e402000 {
+		compatible = "starfive,ipi-amp-mailbox";
+		reg = <0x0 0x6e402000 0x0 0x2000>;
+		#mbox-cells = <1>;
+		rtos-hart-id = <4>;
+		status = "okay";
+	};
+
+	quard_mbox_router0: quard-mbox-router {
+		compatible = "quard,mbox-router";
+		mboxes = <&ipimb 1>, <&ipimb 0>;
+		mbox-names = "router-tx", "router-rx";
+		status = "okay";
+
+		mbox_router_service_flash: service-flash {
+			server-id = <2>;
+		};
+	};
+
+	quard_nor: nor-client {
+		compatible = "quard,nor-client";
+		memory-region = <&nor_agent_reserved>;
+		mbox-router-server = <&mbox_router_service_flash>;
+		status = "okay";
+	};
+
 	chosen {
 		opensbi-domains {
 			compatible = "opensbi,domain,config";
@@ -94,6 +136,16 @@
 
 &cpu4 {
 	opensbi-domain = <&rtdomain>;
+};
+
+/*
+ * SPL still reads the boot payload through the physical Cadence QSPI
+ * controller.  Before U-Boot proper scans driver model, board_fix_fdt()
+ * sees this ownership marker and disables this controller in its writable
+ * DT copy.  U-Boot proper must use quard_nor through the IPI router instead.
+ */
+&qspi {
+	quard,rtos-owned;
 };
 
 &gmac1 {

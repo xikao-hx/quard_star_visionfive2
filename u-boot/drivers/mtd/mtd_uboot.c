@@ -25,7 +25,7 @@ static const char *get_mtdids(void)
 	__maybe_unused const char *mtdparts = NULL;
 	const char *mtdids = env_get("mtdids");
 
-	if (mtdids)
+	if (mtdids && *mtdids)
 		return mtdids;
 
 #if defined(CONFIG_SYS_MTDPARTS_RUNTIME)
@@ -36,8 +36,10 @@ static const char *get_mtdids(void)
 	mtdids = CONFIG_MTDIDS_DEFAULT;
 #endif
 
-	if (mtdids)
+	if (mtdids && *mtdids)
 		env_set("mtdids", mtdids);
+	else
+		mtdids = NULL;
 
 	return mtdids;
 }
@@ -142,7 +144,7 @@ static const char *get_mtdparts(void)
 	else if (env_get_f("mtdparts", tmp_parts, sizeof(tmp_parts)) != -1)
 		mtdparts = tmp_parts;
 
-	if (mtdparts)
+	if (mtdparts && *mtdparts)
 		return mtdparts;
 
 #if defined(CONFIG_SYS_MTDPARTS_RUNTIME)
@@ -153,8 +155,10 @@ static const char *get_mtdparts(void)
 	mtdparts = CONFIG_MTDPARTS_DEFAULT;
 #endif
 
-	if (mtdparts)
+	if (mtdparts && *mtdparts)
 		env_set("mtdparts", mtdparts);
+	else
+		mtdparts = NULL;
 
 	return mtdparts;
 }

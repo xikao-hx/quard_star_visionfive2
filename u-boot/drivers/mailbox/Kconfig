@@ -47,4 +47,17 @@ config ZYNQMP_IPI
 	help
 	  This enables support for the Xilinx ZynqMP Inter Processor Interrupt
 	  communication controller.
+
+config QUARD_IPI_MAILBOX
+	bool "QUARD AMP shared-memory IPI mailbox"
+	depends on DM_MAILBOX && RISCV_SMODE
+	help
+	  Enable the two-channel shared-memory mailbox used between U-Boot
+	  proper and the FreeRTOS AMP runtime on VisionFive 2.
+
+config QUARD_MBOX_ROUTER
+	bool "Quard mailbox message router"
+	depends on QUARD_IPI_MAILBOX
+	help
+	  Provide synchronous 28-byte routed requests for mailbox consumers.
 endmenu

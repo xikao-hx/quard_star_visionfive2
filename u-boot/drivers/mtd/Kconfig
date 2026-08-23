@@ -109,6 +109,13 @@ config HBMC_AM654
 	 This is the driver for HyperBus controller on TI's AM65x and
 	 other SoCs
 
+config QUARD_NOR_CLIENT
+	bool "FreeRTOS mailbox-backed SPI NOR client"
+	depends on DM_MTD && QUARD_MBOX_ROUTER
+	help
+	  Register the VisionFive 2 SPI NOR exposed by the FreeRTOS NOR agent
+	  as a read-only U-Boot MTD device. SPL continues to use physical SPI.
+
 source "drivers/mtd/nand/Kconfig"
 
 source "drivers/mtd/spi/Kconfig"

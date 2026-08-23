@@ -19,6 +19,8 @@ mtd-$(CONFIG_HBMC_AM654) += hbmc-am654.o
 # U-Boot build
 ifeq ($(CONFIG_SPL_BUILD)$(CONFIG_TPL_BUILD),)
 
+mtd-$(CONFIG_QUARD_NOR_CLIENT) += quard_nor_client.o
+
 ifneq ($(mtd-y),)
 obj-y += mtd.o
 endif
