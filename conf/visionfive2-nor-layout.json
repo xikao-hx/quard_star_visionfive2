@@ -1,0 +1,26 @@
+{
+    "layout_version": 1,
+    "flash_size": "0x1000000",
+    "sector_size": "0x200",
+    "erase_size": "0x1000",
+    "page_size": "0x100",
+    "alignment": "0x40000",
+    "update_policies": {
+        "bootrom_protected": 1,
+        "recovery_source": 2,
+        "factory_only": 3,
+        "state_managed": 4,
+        "inactive_bank_first": 5
+    },
+    "partitions": [
+        {"name": "spl_a", "offset": "0x000000", "size": "0x040000", "update_policy": "bootrom_protected"},
+        {"name": "spl_b", "offset": "0x040000", "size": "0x040000", "update_policy": "recovery_source"},
+        {"name": "gpt", "offset": "0x080000", "size": "0x040000", "update_policy": "factory_only"},
+        {"name": "recovery", "offset": "0x0c0000", "size": "0x040000", "update_policy": "state_managed"},
+        {"name": "fw_payload_a", "offset": "0x100000", "size": "0x600000", "update_policy": "inactive_bank_first"},
+        {"name": "fw_payload_b", "offset": "0x700000", "size": "0x600000", "update_policy": "inactive_bank_first"}
+    ],
+    "reserved_regions": [
+        {"name": "reserved", "offset": "0xd00000", "size": "0x300000"}
+    ]
+}
