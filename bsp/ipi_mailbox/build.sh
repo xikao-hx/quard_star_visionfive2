@@ -13,7 +13,7 @@ export KERN_DIR KBUILD_OUTPUT CROSS_COMPILE
 export PATH="$TOOLCHAIN_BIN:$PATH"
 
 # The board mounts this directory directly at /mnt.
-NFS_ROOTFS=${NFS_ROOTFS:-$PROJECT_ROOT/nfs_rootfs}
+NFS_ROOTFS=${NFS_ROOTFS:-$PROJECT_ROOT/nfs_rootfs/mailbox}
 choice=${1:-build}
 
 mkdir -p "$NFS_ROOTFS"
@@ -31,22 +31,16 @@ fi
 
 make -C "$SHELL_FOLDER/mailbox" modules
 make -C "$SHELL_FOLDER/consumer" modules
-rm -f "$NFS_ROOTFS/starfive_ipi_mailbox.ko" \
-      "$NFS_ROOTFS/starfive_ipi_mailbox-test.ko" \
-      "$NFS_ROOTFS/quard_mbox_router.ko" \
-      "$NFS_ROOTFS/quard_remote_console.ko" \
-      "$NFS_ROOTFS/quard_log.ko" \
-      "$NFS_ROOTFS/quard_nor_client.ko"
+rm -f "$NFS_ROOTFS"/*.ko
+
 cp "$SHELL_FOLDER/mailbox/starfive_ipi_mailbox.ko" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/mailbox/starfive_ipi_mailbox-test.ko" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/consumer/quard_mbox_router.ko" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/consumer/quard_remote_console.ko" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/consumer/quard_log.ko" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/consumer/quard_nor_client.ko" "$NFS_ROOTFS/"
-cp "$SHELL_FOLDER/install.sh" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/minicom-start.sh" "$NFS_ROOTFS/"
 cp "$SHELL_FOLDER/install.sh" "$NFS_ROOTFS/"
-cp "$SHELL_FOLDER/minicom-start.sh" "$NFS_ROOTFS/"
 
 echo "IPI mailbox modules installed in: $NFS_ROOTFS"
 ls -l "$NFS_ROOTFS/starfive_ipi_mailbox.ko" \

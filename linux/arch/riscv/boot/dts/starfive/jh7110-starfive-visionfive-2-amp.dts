@@ -94,6 +94,14 @@
 		status = "okay";
 	};
 
+	nor_client: nor-client {
+		compatible = "quard,nor-client";
+		mbox-router-server = <&mbox_router_service_flash>;
+		memory-region = <&nor_client_reserved>;
+		memory-region-names = "bulk-data";
+		status = "okay";
+	};
+
 	log_device: log-device {
 		compatible = "quard,log_device";
 		memory-region = <&mcu_log_reserved>,
