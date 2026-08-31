@@ -1112,6 +1112,14 @@ config SPL_SPI_LOAD
 	  Enable support for loading next stage, U-Boot or otherwise, from
 	  SPI NOR in U-Boot SPL.
 
+config SPL_QUARD_BOOTCTRL
+	bool "Select the Quard A/B payload from recovery metadata"
+	depends on SPL_SPI_LOAD && SPL_SPI_FLASH_SUPPORT
+	help
+	  Validate the relocated NOR GPT and recovery metadata before loading
+	  the SPI payload. Select fw_payload_a or fw_payload_b from target_bank
+	  and synchronize current_bank through the SPL SPI flash driver.
+
 endif # SPL_SPI_FLASH_SUPPORT
 
 config SYS_SPI_U_BOOT_OFFS

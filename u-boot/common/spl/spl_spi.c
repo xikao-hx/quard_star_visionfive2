@@ -16,6 +16,9 @@
 #include <errno.h>
 #include <spl.h>
 #include <asm/global_data.h>
+#if CONFIG_IS_ENABLED(QUARD_BOOTCTRL)
+#include "quard_bootctrl.h"
+#endif
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -107,6 +110,12 @@ static int spl_spi_load_image(struct spl_image_info *spl_image,
 	payload_offs = fdtdec_get_config_int(gd->fdt_blob,
 					     "u-boot,spl-payload-offset",
 					     payload_offs);
+#endif
+
+#if CONFIG_IS_ENABLED(QUARD_BOOTCTRL)
+	err = quard_bootctrl_select_payload(flash, &payload_offs, NULL);
+	if (err)
+		return err;
 #endif
 
 #ifdef CONFIG_SPL_OS_BOOT
