@@ -259,20 +259,54 @@
 	"bootdir=/boot\0"		\
 	"bootpart=3\0"			\
 	"rootpart=4\0"			\
+	"default_bootpart=3\0"		\
+	"default_rootpart=4\0"		\
+	"sd_ab_env_version=1\0"	\
+	"sd_ab_enabled=0\0"		\
+	"sd_ab_failed=0\0"		\
+	"use_default_parts="		\
+		"setenv bootpart ${default_bootpart};" \
+		"setenv rootpart ${default_rootpart};" \
+		"setenv sd_ab_boot 0;\0"	\
+	"use_sd_ab_parts="		\
+		"setenv bootpart ${sd_bootpart};" \
+		"setenv rootpart ${sd_rootpart};" \
+		"setenv verify yes;" \
+		"setenv sd_ab_boot 1;\0"	\
+	"sd_ab_fail="			\
+		"echo SD A/B slot ${active_bank} failed, stopping fallback;" \
+		"setenv sd_ab_failed 1;" \
+		"setenv bootmode ab-failed;\0" \
 	"load_sdk_uenv="		\
 		"fatload ${bootdev} ${devnum}:${bootpart} ${loadaddr} ${bootenv_sdk};"	\
 		"env import -t ${loadaddr} ${filesize}; \0"				\
+	"legacy_mmc_boot=" \
+		"run use_default_parts;" \
+		"if test -e mmc ${devnum}:${bootpart} ${bootenv_sdk}; then " \
+			"setenv sdev_blk mmcblk${devnum}p${rootpart};" \
+			"run load_sdk_uenv; run boot2;" \
+		"fi;" \
+		"setenv devtype mmc;" \
+		"setenv distro_bootpart ${bootpart};" \
+		"run scan_dev_for_scripts;\0" \
 	"mmc_test_and_boot="				\
+		"if test ${sd_ab_failed} = 0; then " \
 		"if mmc dev ${devnum}; then "	\
 			"echo Try booting from MMC${devnum} ...; "	\
-			"if test -e mmc ${devnum}:${bootpart} ${bootenv_sdk}; then "	\
-				"setenv sdev_blk mmcblk${devnum}p${rootpart};"	\
-				"run load_sdk_uenv; run boot2;"	\
-			"fi;"	\
-			"setenv devtype mmc;"	\
-			"setenv distro_bootpart ${bootpart};"	\
-			"run scan_dev_for_scripts;"	\
-		"fi;\0"							\
+			"if test ${devnum} = ${sd_devnum}; then " \
+				"if test ${sd_ab_enabled} = 1; then " \
+					"run use_sd_ab_parts;" \
+					"if test -e mmc ${devnum}:${bootpart} ${bootenv_sdk}; then " \
+						"if run load_sdk_uenv; then " \
+							"run use_sd_ab_parts;" \
+							"run boot2; run sd_ab_fail;" \
+						"else run sd_ab_fail; fi;" \
+					"else run sd_ab_fail; fi;" \
+				"else run legacy_mmc_boot; fi;" \
+			"else " \
+				"run legacy_mmc_boot;" \
+			"fi;" \
+		"fi; fi;\0"						\
 	"bootenv_mmc="					\
 		"setenv bootdev mmc;"			\
 		"if test ${bootmode} = flash; then "	\
@@ -291,6 +325,7 @@
 		"fi; \0"				\
 	"bootenv_nvme="					\
 		"if test ${bootmode} = flash; then "	\
+			"run use_default_parts;" \
 			"for nvme_devnum in ${nvme_devnum_l}; do " \
 				"setenv devnum ${nvme_devnum};" \
 				"if pci enum; then "		\
@@ -435,4 +470,3 @@
 #define CONFIG_ID_EEPROM
 
 #endif /* _STARFIVE_VISIONFIVE2_H */
-

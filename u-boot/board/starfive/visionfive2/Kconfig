@@ -29,6 +29,15 @@ config SPL_TEXT_BASE
 config SPL_OPENSBI_LOAD_ADDR
 	default 0x80000000
 
+config QUARD_BOOTCTRL
+	bool "Select VisionFive 2 SD Linux A/B slot from recovery"
+	depends on QUARD_NOR_CLIENT && MTD && CMD_PART && CMD_FAT
+	help
+	  Read current_bank from the recovery MTD partition through the
+	  mailbox-backed NOR client and export the matching SD boot/rootfs
+	  partition variables.  This helper is built for U-Boot proper only;
+	  SPL continues to own recovery updates and payload selection.
+
 config BOARD_SPECIFIC_OPTIONS # dummy
 	def_bool y
 	select STARFIVE_JH7110

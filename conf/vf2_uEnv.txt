@@ -1,13 +1,12 @@
 # This is the sample jh7110_uEnv.txt file for starfive visionfive U-boot
 # The current convention (SUBJECT TO CHANGE) is that this file
-# will be loaded from the third partition on the
-# MMC card.
+# will be loaded from the selected SD A/B boot partition.
 
 # The FIT file to boot from
-fitfile=starfiveu.fit
+fitfile=image.fit
 
 # for debugging boot
-bootargs_ext=setenv bootargs "console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=/dev/${sdev_blk}";
+bootargs_ext=if part uuid ${bootdev} ${devnum}:${rootpart} rootuuid; then if test "${sd_ab_boot}" = "1"; then setenv bootargs "console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=PARTUUID=${rootuuid} rw active_bank=${active_system}"; else setenv bootargs "console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=PARTUUID=${rootuuid} rw"; fi; else echo "Cannot resolve rootfs PARTUUID for ${bootdev} ${devnum}:${rootpart}"; false; fi
 
 # for addr info
 # boot Linux flat or compressed 'Image' stored at 'kernel_addr_r'
@@ -22,4 +21,4 @@ setupfdt2=fdt set /chosen bootargs "${bootargs}";
 
 bootwait=setenv _delay ${bootdelay}; echo ${_delay}; while test ${_delay} > 0; do sleep 1; setexpr _delay ${_delay} - 1; echo ${_delay}; done
 
-boot2=run bootargs_ext; fatload ${bootdev} ${devnum}:${bootpart} ${loadaddr} ${fitfile}; bootm start ${loadaddr}; run setupfdt1;run setupird;run setupfdt2; bootm loados ${loadaddr}; run chipa_set_linux; run cpu_vol_set; echo "Booting kernel in"; booti ${kernel_addr_r} ${ramdisk_addr_r}:${filesize} ${fdtaddr}
+boot2=if run bootargs_ext; then if fatload ${bootdev} ${devnum}:${bootpart} ${loadaddr} ${fitfile}; then if bootm start ${loadaddr}; then run setupfdt1; run setupird; run setupfdt2; if bootm loados ${loadaddr}; then run chipa_set_linux; run cpu_vol_set; echo "Booting kernel in"; booti ${kernel_addr_r} ${ramdisk_addr_r}:${filesize} ${fdtaddr}; fi; fi; fi; fi

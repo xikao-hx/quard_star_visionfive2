@@ -23,6 +23,10 @@
 #include <splash.h>
 #include "visionfive2_lite_bmp_logo.h"
 
+#if CONFIG_IS_ENABLED(QUARD_BOOTCTRL)
+#include "quard_bootctrl.h"
+#endif
+
 #define SYS_CLOCK_ENABLE(clk) \
 	setbits_le32(SYS_CRG_BASE + clk, CLK_ENABLE_MASK)
 
@@ -445,6 +449,20 @@ int board_late_init(void)
 
 	get_boot_mode();
 	get_mmc_size_from_eeprom();
+
+#if CONFIG_IS_ENABLED(QUARD_BOOTCTRL)
+	/* Ignore any persisted slot marker until recovery is read this boot. */
+	env_set("sd_ab_enabled", "0");
+	if (!strcmp(env_get("bootmode"), "flash") ||
+	    !strcmp(env_get("bootmode"), "sd")) {
+		ret = quard_bootctrl_apply();
+		if (ret) {
+			puts("SD bootctrl: automatic boot disabled; use the U-Boot shell\n");
+			if (env_set("bootdelay", "-1"))
+				puts("SD bootctrl: failed to disable automatic boot\n");
+		}
+	}
+#endif
 
 	if (vf2_board_type == 2) {
 		/* gpio62 output low level for switching usb to host by default */

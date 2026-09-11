@@ -1,12 +1,12 @@
 # This is the sample jh7110_uEnv.txt file for starfive visionfive U-boot
 # The current convention (SUBJECT TO CHANGE) is that this file
-# will be loaded from the third partition on the
-# MMC card.
+# is kept for manual/debug use. VisionFive2 automatic A/B boot loads
+# vf2_uEnv.txt instead.
 devnum=0
 partnum=3
 
 # The FIT file to boot from
-fitfile=starfiveu.fit
+fitfile=image.fit
 
 # for debugging boot
 bootargs=earlyprintk console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=/dev/mmcblk0p4
@@ -29,4 +29,3 @@ setupfdt2=fdt print /chosen; fdt set /chosen bootargs "${bootargs}"; fdt print /
 bootwait=setenv _delay ${bootdelay}; echo ${_delay}; while test ${_delay} > 0; do sleep 1; setexpr _delay ${_delay} - 1; echo ${_delay}; done
 
 boot2=fatload mmc ${devnum}:${partnum} ${fileaddr} ${fitfile}; bootm start ${fileaddr}; run setupfdt1;run setupird;run setupfdt2; bootm loados ${fileaddr}; run chipa_set_linux; run cpu_vol_set; echo "Booting kernel in"; booti ${kernel_addr_r} ${irdaddr}:${filesize} ${fdtaddr}
-
