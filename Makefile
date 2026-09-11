@@ -15,6 +15,7 @@ srcdir := $(srcdir:/=)
 confdir := $(srcdir)/conf
 wrkdir := $(CURDIR)/work
 ampwrkdir := $(CURDIR)/work/amp
+sdk_target_dir := $(wrkdir)/target
 
 buildroot_srcdir := $(srcdir)/buildroot
 buildroot_initramfs_wrkdir := $(wrkdir)/buildroot_initramfs
@@ -30,9 +31,15 @@ buildroot_initramfs_tar := $(buildroot_initramfs_wrkdir)/images/rootfs.tar
 buildroot_initramfs_config := $(confdir)/buildroot_initramfs_config
 buildroot_initramfs_sysroot_stamp := $(wrkdir)/.buildroot_initramfs_sysroot
 buildroot_initramfs_sysroot := $(wrkdir)/buildroot_initramfs_sysroot
+buildroot_initramfs_init := $(buildroot_srcdir)/system/skeleton/init
+buildroot_initramfs_partuuid_stamp := $(wrkdir)/.buildroot_initramfs_partuuid
 buildroot_rootfs_wrkdir := $(wrkdir)/buildroot_rootfs
 buildroot_rootfs_ext := $(buildroot_rootfs_wrkdir)/images/rootfs.ext4
 buildroot_rootfs_config := $(confdir)/buildroot_rootfs_config
+amp_rootfs_post_build := $(confdir)/amp_rootfs_post_build.sh
+busybox_nfs_config := $(confdir)/busybox-nfs.config
+util_linux_config := $(buildroot_srcdir)/package/util-linux/Config.in
+util_linux_makefile := $(buildroot_srcdir)/package/util-linux/util-linux.mk
 
 # override buildroot config if specify the HWBOARD_CONFIG
 ifeq ($(HWBOARD_CONFIG), debug)
@@ -103,9 +110,12 @@ TRUSTED_CROSS_COMPILE ?= /opt/riscv/bin/riscv64-unknown-elf-
 trusted_fw_sources := $(shell find $(trusted_domain_srcdir) \
 	-path '*/build*' -prune -o -type f \( -name '*.c' -o -name '*.h' -o -name '*.S' -o -name '*.lds' -o -name 'Makefile' \) -print)
 
-# AMP runtime selection.  The final image name is intentionally the same for
-# both runtimes so the selected runtime is controlled only by this parameter.
-AMP_RTOS ?= freertos
+# RTOS selection.  The final image name is intentionally the same for both
+# runtimes so the selected runtime is controlled only by this parameter.
+ifneq ($(origin AMP_RTOS),undefined)
+$(error AMP_RTOS is no longer supported; use RTOS=freertos or RTOS=rtthread)
+endif
+RTOS ?= freertos
 rtthread_srcdir := $(srcdir)/rtthread/bsp/starfive/jh7110
 rtthread_bin := $(ampwrkdir)/rtthread.bin
 RTTHREAD_SCONS ?= scons
@@ -113,12 +123,12 @@ RTTHREAD_EXEC_PATH ?= /opt/riscv/bin
 RTTHREAD_CC_PREFIX ?= riscv64-unknown-elf-
 rtthread_sources := $(shell find $(srcdir)/rtthread/bsp/starfive -path '*/build*' -prune -o -type f \( -name '*.c' -o -name '*.h' -o -name '*.S' -o -name '*.lds' -o -name 'SConscript' -o -name 'SConstruct' -o -name 'rtconfig.py' \) -print)
 
-ifeq ($(AMP_RTOS),freertos)
+ifeq ($(RTOS),freertos)
 	amp_fw := $(trusted_fw)
-else ifeq ($(AMP_RTOS),rtthread)
+else ifeq ($(RTOS),rtthread)
 	amp_fw := $(rtthread_bin)
 else
-$(error AMP_RTOS must be freertos or rtthread, got '$(AMP_RTOS)')
+$(error RTOS must be freertos or rtthread, got '$(RTOS)')
 endif
 amp_runtime_state := $(ampwrkdir)/.amp-rtos-current
 uboot_amp_wrkdir := $(wrkdir)/amp/u-boot
@@ -212,14 +222,28 @@ $(version):
 	sh $(confdir)/version > $(version)
 	chmod 777 $(version)
 
-$(buildroot_initramfs_wrkdir)/.config: $(buildroot_srcdir)
+$(buildroot_initramfs_wrkdir)/.config: $(buildroot_srcdir) \
+		$(buildroot_initramfs_config)
 #	rm -rf $(dir $@)
 	mkdir -p $(dir $@)
 	cp $(buildroot_initramfs_config) $@
 	$(MAKE) -C $< RISCV=$(RISCV) O=$(buildroot_initramfs_wrkdir) olddefconfig
 
+$(buildroot_initramfs_partuuid_stamp): \
+		$(buildroot_initramfs_wrkdir)/.config \
+		$(buildroot_initramfs_config) $(util_linux_config) \
+		$(util_linux_makefile)
+	$(MAKE) -C $(buildroot_srcdir) O=$(buildroot_initramfs_wrkdir) \
+		util-linux-dirclean
+	touch $@
+
 # buildroot_initramfs provides gcc
-$(buildroot_initramfs_tar): $(buildroot_srcdir) $(buildroot_initramfs_wrkdir)/.config $(buildroot_initramfs_config)
+$(buildroot_initramfs_tar): $(buildroot_srcdir) \
+		$(buildroot_initramfs_wrkdir)/.config \
+		$(buildroot_initramfs_partuuid_stamp) \
+		$(buildroot_initramfs_config) $(amp_rootfs_post_build) \
+		$(busybox_nfs_config) $(buildroot_initramfs_init) \
+		$(util_linux_config) $(util_linux_makefile)
 	$(MAKE) -C $< RISCV=$(RISCV) O=$(buildroot_initramfs_wrkdir)
 
 .PHONY: buildroot_initramfs-menuconfig
@@ -230,13 +254,18 @@ buildroot_initramfs-menuconfig: $(buildroot_initramfs_wrkdir)/.config $(buildroo
 
 # use buildroot_initramfs toolchain
 # TODO: fix path and conf/buildroot_rootfs_config
-$(buildroot_rootfs_wrkdir)/.config: $(buildroot_srcdir) $(buildroot_initramfs_tar)
+$(buildroot_rootfs_wrkdir)/.config: $(buildroot_srcdir) \
+		$(buildroot_initramfs_tar) $(buildroot_rootfs_config)
 #	rm -rf $(dir $@)
 	mkdir -p $(dir $@)
 	cp $(buildroot_rootfs_config) $@
 	$(MAKE) -C $< RISCV=$(RISCV) PATH=$(RVPATH) O=$(buildroot_rootfs_wrkdir) olddefconfig
 
-$(buildroot_rootfs_ext): $(buildroot_srcdir) $(buildroot_rootfs_wrkdir)/.config $(target_gcc) $(buildroot_rootfs_config) $(version) $(perf_tool_wrkdir)/perf
+$(buildroot_rootfs_ext): $(buildroot_srcdir) \
+		$(buildroot_rootfs_wrkdir)/.config $(target_gcc) \
+		$(buildroot_rootfs_config) $(amp_rootfs_post_build) \
+		$(busybox_nfs_config) $(buildroot_initramfs_init) $(version) \
+		$(util_linux_config) $(util_linux_makefile) $(perf_tool_wrkdir)/perf
 	mkdir -p $(buildroot_rootfs_wrkdir)/target/lib
 	cp -r $(module_install_path)/lib/modules $(buildroot_rootfs_wrkdir)/target/lib/
 	mkdir -p $(buildroot_rootfs_wrkdir)/target/usr/bin
@@ -472,8 +501,8 @@ amp_runtime_state_force:
 
 $(amp_runtime_state): amp_runtime_state_force
 	mkdir -p $(ampwrkdir)
-	if [ ! -f $@ ] || [ "$$(cat $@)" != "$(AMP_RTOS)" ]; then \
-		echo "$(AMP_RTOS)" > $@; \
+	if [ ! -f $@ ] || [ "$$(cat $@)" != "$(RTOS)" ]; then \
+		echo "$(RTOS)" > $@; \
 	fi
 
 $(uboot_amp_orig): $(uboot_srcdir) $(target_gcc) $(amp_fw) $(amp_runtime_state) $(uboot_ramlog_source) $(uboot_ramlog_spl_hook) $(quard_log_header)
@@ -523,6 +552,71 @@ ampuboot_fit: $(ampuboot_fit)
 ampfit: $(ampfit)
 amp_vfat_image: $(amp_vfat_image)
 
+normal_publish_dir := $(sdk_target_dir)/normal
+amp_publish_dir := $(sdk_target_dir)/amp
+
+normal_publish_spl := $(normal_publish_dir)/$(spl_bin_normal_out)
+normal_publish_fw_payload := $(normal_publish_dir)/$(HWBOARD)_fw_payload.img
+normal_publish_fit := $(normal_publish_dir)/image.fit
+normal_publish_rootfs := $(normal_publish_dir)/rootfs.ext4
+normal_publish_sdcard := $(normal_publish_dir)/sdcard.img
+
+amp_publish_spl := $(amp_publish_dir)/$(amp_spl_bin_normal_out)
+amp_publish_fw_payload := $(amp_publish_dir)/$(HWBOARD)_fw_payload_amp.img
+amp_publish_fit := $(amp_publish_dir)/image.fit
+amp_publish_rootfs := $(amp_publish_dir)/rootfs.ext4
+amp_publish_sdcard := $(amp_publish_dir)/sdcard_amp.img
+
+$(normal_publish_dir) $(amp_publish_dir):
+	mkdir -p $@
+
+$(normal_publish_spl): $(spl_bin_normal_out) | $(normal_publish_dir)
+	cp -f $(wrkdir)/$(spl_bin_normal_out) $@
+
+$(normal_publish_fw_payload): $(uboot_fit) | $(normal_publish_dir)
+	cp -f $< $@
+
+$(normal_publish_fit): $(fit) | $(normal_publish_dir)
+	cp -f $< $@
+
+$(normal_publish_rootfs): $(buildroot_rootfs_ext) | $(normal_publish_dir)
+	cp -f $< $@
+
+$(normal_publish_sdcard): img | $(normal_publish_dir)
+	cp -f $(wrkdir)/sdcard.img $@
+
+$(amp_publish_spl): $(ampuboot_fit) | $(amp_publish_dir)
+	cp -f $(wrkdir)/$(amp_spl_bin_normal_out) $@
+
+$(amp_publish_fw_payload): $(ampuboot_fit) | $(amp_publish_dir)
+	cp -f $(ampuboot_fit) $@
+
+$(amp_publish_fit): $(ampfit) | $(amp_publish_dir)
+	cp -f $(ampfit) $@
+
+$(amp_publish_rootfs): $(buildroot_rootfs_ext) | $(amp_publish_dir)
+	cp -f $< $@
+
+$(amp_publish_sdcard): amp_img | $(amp_publish_dir)
+	cp -f $(wrkdir)/sdcard_amp.img $@
+
+.PHONY: publish_normal_images publish_amp_images publish_all_images
+publish_normal_images: $(normal_publish_spl) $(normal_publish_fw_payload) \
+	$(normal_publish_fit) $(normal_publish_rootfs) $(normal_publish_sdcard)
+	@echo "Normal images published to $(normal_publish_dir)"
+
+publish_amp_images: $(amp_publish_spl) $(amp_publish_fw_payload) \
+	$(amp_publish_fit) $(amp_publish_rootfs) $(amp_publish_sdcard)
+	@echo "AMP images published to $(amp_publish_dir)"
+
+publish_all_images:
+	$(MAKE) publish_normal_images
+	$(MAKE) publish_amp_images RTOS=$(RTOS)
+
+.PHONY: publish-clean
+publish-clean:
+	rm -rf -- $(sdk_target_dir)
+
 .PHONY: amp-clean
 amp-clean:
 	rm -rf work/amp
@@ -540,6 +634,7 @@ clean:
 	rm -f work/linux/vmlinux*
 	rm -f work/u-boot-spl.bin.normal.out
 	rm -f work/version
+	rm -rf $(sdk_target_dir)
 	rm -rf $(spl_tool_wrkdir)
 	rm -rf $(perf_tool_wrkdir)
 
