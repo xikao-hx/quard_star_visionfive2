@@ -36,22 +36,43 @@ fi
 export ROOT
 
 mkdir /rootfs
-if [ $ROOT == "/dev/nfs" ] && [ "x${NFSROOT}" != "x" ];then
+if [ "$ROOT" = "/dev/nfs" ] && [ "x${NFSROOT}" != "x" ]; then
 	/sbin/ifup -a
-	mount -t nfs -o nolock $NFSROOT /rootfs
+	mount -t nfs -o nolock "$NFSROOT" /rootfs
 else
+	ROOT_DEVICE="$ROOT"
 	cnt=0
-	while [ $cnt -lt 100 ]
+	while [ "$cnt" -lt 100 ]
 	do
-		if [ ! -e $ROOT ];then
-			sleep 0.1
-		else
-			echo "find $ROOT: $cnt"
+		case "$ROOT" in
+			PARTUUID=*)
+				# BusyBox blkid does not report GPT PARTUUIDs. The
+				# initramfs includes util-linux blkid for this lookup.
+				ROOT_DEVICE=$(/sbin/blkid -t "$ROOT" -o device 2>/dev/null)
+				;;
+			*)
+				ROOT_DEVICE="$ROOT"
+				;;
+		esac
+
+		if [ -n "$ROOT_DEVICE" ] && [ -b "$ROOT_DEVICE" ]; then
+			echo "find $ROOT as $ROOT_DEVICE: $cnt"
 			break
 		fi
-		let cnt++
+
+		ROOT_DEVICE=
+		sleep 0.1
+		cnt=$((cnt + 1))
 	done
-	mount $ROOT /rootfs/
+
+	if [ -z "$ROOT_DEVICE" ]; then
+		echo "ERROR: root device $ROOT was not found" >&2
+		exit 1
+	fi
+	if ! mount "$ROOT_DEVICE" /rootfs/; then
+		echo "ERROR: failed to mount $ROOT_DEVICE as root" >&2
+		exit 1
+	fi
 	if [ ! -e /rootfs/dev/console ]; then
 		/bin/mknod /rootfs/dev/console c 5 1
 	fi
@@ -64,9 +85,8 @@ mount -n -o move /proc /rootfs/proc
 mount -n -o move /sys /rootfs/sys
 mount -n -o move /run /rootfs/run
 mount -n -o move /tmp /rootfs/tmp
+# Moving devtmpfs also moves its /dev/shm and /dev/pts child mounts.
 mount -n -o move /dev /rootfs/dev
-mount -n -o move /dev/shm /rootfs/dev/shm
-mount -n -o move /dev/pts /rootfs/dev/pts
 
 exec run-init /rootfs "${init}" "$@" <"/rootfs/dev/console" >"/rootfs/dev/console" 2>&1
 echo "Something went badly wrong in the initramfs."

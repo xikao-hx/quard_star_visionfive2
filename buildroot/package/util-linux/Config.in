@@ -67,6 +67,14 @@ config BR2_PACKAGE_UTIL_LINUX_BINARIES
 	  The setarch utility also installs architecture-specific
 	  symlinks like linux32, linux64, uname26, i386 and x86_64.
 
+config BR2_PACKAGE_UTIL_LINUX_BLKID
+	bool "blkid"
+	depends on BR2_USE_MMU # fork()
+	select BR2_PACKAGE_UTIL_LINUX_LIBBLKID
+	help
+	  Install blkid, which identifies filesystem and partition metadata,
+	  including GPT PARTUUID values.
+
 config BR2_PACKAGE_UTIL_LINUX_AGETTY
 	bool "agetty"
 	depends on BR2_USE_MMU # fork()
