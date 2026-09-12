@@ -559,13 +559,11 @@ normal_publish_spl := $(normal_publish_dir)/$(spl_bin_normal_out)
 normal_publish_fw_payload := $(normal_publish_dir)/$(HWBOARD)_fw_payload.img
 normal_publish_fit := $(normal_publish_dir)/image.fit
 normal_publish_rootfs := $(normal_publish_dir)/rootfs.ext4
-normal_publish_sdcard := $(normal_publish_dir)/sdcard.img
 
 amp_publish_spl := $(amp_publish_dir)/$(amp_spl_bin_normal_out)
 amp_publish_fw_payload := $(amp_publish_dir)/$(HWBOARD)_fw_payload_amp.img
 amp_publish_fit := $(amp_publish_dir)/image.fit
 amp_publish_rootfs := $(amp_publish_dir)/rootfs.ext4
-amp_publish_sdcard := $(amp_publish_dir)/sdcard_amp.img
 
 $(normal_publish_dir) $(amp_publish_dir):
 	mkdir -p $@
@@ -582,9 +580,6 @@ $(normal_publish_fit): $(fit) | $(normal_publish_dir)
 $(normal_publish_rootfs): $(buildroot_rootfs_ext) | $(normal_publish_dir)
 	cp -f $< $@
 
-$(normal_publish_sdcard): img | $(normal_publish_dir)
-	cp -f $(wrkdir)/sdcard.img $@
-
 $(amp_publish_spl): $(ampuboot_fit) | $(amp_publish_dir)
 	cp -f $(wrkdir)/$(amp_spl_bin_normal_out) $@
 
@@ -597,16 +592,13 @@ $(amp_publish_fit): $(ampfit) | $(amp_publish_dir)
 $(amp_publish_rootfs): $(buildroot_rootfs_ext) | $(amp_publish_dir)
 	cp -f $< $@
 
-$(amp_publish_sdcard): amp_img | $(amp_publish_dir)
-	cp -f $(wrkdir)/sdcard_amp.img $@
-
 .PHONY: publish_normal_images publish_amp_images publish_all_images
 publish_normal_images: $(normal_publish_spl) $(normal_publish_fw_payload) \
-	$(normal_publish_fit) $(normal_publish_rootfs) $(normal_publish_sdcard)
+	$(normal_publish_fit) $(normal_publish_rootfs)
 	@echo "Normal images published to $(normal_publish_dir)"
 
 publish_amp_images: $(amp_publish_spl) $(amp_publish_fw_payload) \
-	$(amp_publish_fit) $(amp_publish_rootfs) $(amp_publish_sdcard)
+	$(amp_publish_fit) $(amp_publish_rootfs)
 	@echo "AMP images published to $(amp_publish_dir)"
 
 publish_all_images:

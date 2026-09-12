@@ -54,11 +54,11 @@ if [ ! -f /opt/riscv/bin/riscv64-unknown-elf-gcc ]; then
     fi
 fi
 
-# Build the 6.6 AMP image. Select the runtime with AMP_RTOS=freertos or
-# AMP_RTOS=rtthread; FreeRTOS is the default.
-echo "Build the whole ${AMP_RTOS:-freertos} AMP FIT image and sdcard img ..."
+# Build the 6.6 AMP image. Select the runtime with RTOS=freertos or
+# RTOS=rtthread; FreeRTOS is the default.
+echo "Build the whole ${RTOS:-freertos} AMP FIT image and sdcard img ..."
 make -j$(nproc)
 make buildroot_rootfs -j$(nproc)
-make ampuboot_fit AMP_RTOS=${AMP_RTOS:-freertos} -j$(nproc)
+make ampuboot_fit RTOS=${RTOS:-freertos} -j$(nproc)
 make img
-make amp_img
+make amp_img RTOS=${RTOS:-freertos}
