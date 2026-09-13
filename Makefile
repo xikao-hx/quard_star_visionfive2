@@ -563,6 +563,7 @@ normal_publish_rootfs := $(normal_publish_dir)/rootfs.ext4
 amp_publish_spl := $(amp_publish_dir)/$(amp_spl_bin_normal_out)
 amp_publish_fw_payload := $(amp_publish_dir)/$(HWBOARD)_fw_payload_amp.img
 amp_publish_fit := $(amp_publish_dir)/image.fit
+amp_publish_vfat := $(amp_publish_dir)/starfive-$(HWBOARD)-vfat.part
 amp_publish_rootfs := $(amp_publish_dir)/rootfs.ext4
 
 $(normal_publish_dir) $(amp_publish_dir):
@@ -589,6 +590,9 @@ $(amp_publish_fw_payload): $(ampuboot_fit) | $(amp_publish_dir)
 $(amp_publish_fit): $(ampfit) | $(amp_publish_dir)
 	cp -f $(ampfit) $@
 
+$(amp_publish_vfat): $(amp_vfat_image) | $(amp_publish_dir)
+	cp -f $< $@
+
 $(amp_publish_rootfs): $(buildroot_rootfs_ext) | $(amp_publish_dir)
 	cp -f $< $@
 
@@ -598,7 +602,7 @@ publish_normal_images: $(normal_publish_spl) $(normal_publish_fw_payload) \
 	@echo "Normal images published to $(normal_publish_dir)"
 
 publish_amp_images: $(amp_publish_spl) $(amp_publish_fw_payload) \
-	$(amp_publish_fit) $(amp_publish_rootfs)
+	$(amp_publish_fit) $(amp_publish_vfat) $(amp_publish_rootfs)
 	@echo "AMP images published to $(amp_publish_dir)"
 
 publish_all_images:

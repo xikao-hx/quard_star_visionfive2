@@ -6,7 +6,7 @@ devnum=0
 partnum=3
 
 # The FIT file to boot from
-fitfile=image.fit
+fitfile=starfiveu.fit
 
 # for debugging boot
 bootargs=earlyprintk console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=/dev/mmcblk0p4

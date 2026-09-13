@@ -3,7 +3,7 @@
 # will be loaded from the selected SD A/B boot partition.
 
 # The FIT file to boot from
-fitfile=image.fit
+fitfile=starfiveu.fit
 
 # for debugging boot
 bootargs_ext=if part uuid ${bootdev} ${devnum}:${rootpart} rootuuid; then if test "${sd_ab_boot}" = "1"; then setenv bootargs "console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=PARTUUID=${rootuuid} rw active_bank=${active_system}"; else setenv bootargs "console=tty1 console=ttyS0,115200 debug rootwait earlycon=sbi root=PARTUUID=${rootuuid} rw"; fi; else echo "Cannot resolve rootfs PARTUUID for ${bootdev} ${devnum}:${rootpart}"; false; fi
