@@ -6,7 +6,7 @@ SHELL_FOLDER=$(cd "$(dirname "$0")";pwd)
 
 cd "$SHELL_FOLDER"
 echo 7 > /proc/sys/kernel/printk
-# insmod starfive_ipi_mailbox.ko
+insmod starfive_ipi_mailbox.ko
 insmod quard_mbox_router.ko
 insmod quard_remote_console.ko
 insmod quard_log.ko
