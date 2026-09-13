@@ -47,6 +47,27 @@ Environment:
 EOF
 }
 
+build_userdata_image()
+{
+    local userdata_image="$repo_dir/work/userdata.ext4"
+    local temp_image="${userdata_image}.tmp"
+    local mke2fs="$repo_dir/work/buildroot_rootfs/host/sbin/mkfs.ext4"
+
+    if [[ ! -x "$mke2fs" ]]; then
+        printf 'userdata image tool is missing: %s\n' "$mke2fs" >&2
+        return 1
+    fi
+
+    mkdir -p "$repo_dir/work"
+    if ! truncate -s 2048M "$temp_image" ||
+       ! "$mke2fs" -F -t ext4 -L userdata "$temp_image"; then
+        rm -f -- "$temp_image"
+        return 1
+    fi
+    mv -f -- "$temp_image" "$userdata_image"
+    printf 'Userdata image generated: %s (2 GiB)\n' "$userdata_image"
+}
+
 run_sdk()
 {
     local action=${1:-build}
@@ -65,10 +86,12 @@ run_sdk()
                     ;;
                 amp)
                     make -C "$repo_dir" publish_amp_images RTOS="$rtos" -j"$jobs"
+                    build_userdata_image
                     "$repo_dir/tools/image/build.sh" all
                     ;;
                 all)
                     make -C "$repo_dir" publish_all_images RTOS="$rtos" -j"$jobs"
+                    build_userdata_image
                     "$repo_dir/tools/image/build.sh" all
                     ;;
                 *)

@@ -7,7 +7,15 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 project_dir=$(dirname "$script_dir")
 
 mkdir -p "$target_dir/etc/network" "$target_dir/etc/init.d" \
-	"$target_dir/mnt/"
+	"$target_dir/mnt/" "$target_dir/userdata"
+
+touch "$target_dir/etc/fstab"
+if ! grep -q '^[[:space:]]*PARTLABEL=userdata[[:space:]]' \
+		"$target_dir/etc/fstab"; then
+	printf '%s\n' \
+		'PARTLABEL=userdata  /userdata  ext4  defaults,noatime  0  2' \
+		>> "$target_dir/etc/fstab"
+fi
 
 # Buildroot does not reinstall the skeleton automatically after an incremental
 # edit. Keep the early init used by generated root filesystems in sync.

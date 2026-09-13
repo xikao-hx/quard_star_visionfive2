@@ -261,7 +261,7 @@
 	"rootpart=4\0"			\
 	"default_bootpart=3\0"		\
 	"default_rootpart=4\0"		\
-	"sd_ab_env_version=1\0"	\
+	"sd_ab_env_version=2\0"	\
 	"sd_ab_enabled=0\0"		\
 	"sd_ab_failed=0\0"		\
 	"use_default_parts="		\
@@ -269,8 +269,19 @@
 		"setenv rootpart ${default_rootpart};" \
 		"setenv sd_ab_boot 0;\0"	\
 	"use_sd_ab_parts="		\
-		"setenv bootpart ${sd_bootpart};" \
-		"setenv rootpart ${sd_rootpart};" \
+		"if part number mmc ${devnum} ${sd_bootlabel} bootpart; then " \
+			"if part number mmc ${devnum} ${sd_rootlabel} rootpart; then " \
+				"echo SD A/B resolved ${sd_bootlabel}/${sd_rootlabel} by PARTLABEL;" \
+			"else " \
+				"echo Cannot resolve ${sd_rootlabel}, using legacy partition numbers;" \
+				"setenv bootpart ${sd_bootpart};" \
+				"setenv rootpart ${sd_rootpart};" \
+			"fi;" \
+		"else " \
+			"echo Cannot resolve ${sd_bootlabel}, using legacy partition numbers;" \
+			"setenv bootpart ${sd_bootpart};" \
+			"setenv rootpart ${sd_rootpart};" \
+		"fi;" \
 		"setenv verify yes;" \
 		"setenv sd_ab_boot 1;\0"	\
 	"sd_ab_fail="			\

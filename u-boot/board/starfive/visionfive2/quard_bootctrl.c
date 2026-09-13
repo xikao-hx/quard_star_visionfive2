@@ -18,10 +18,12 @@
 #include "quard_bootctrl.h"
 
 #define QUARD_RECOVERY_MTD_NAME	"recovery"
-#define QUARD_BOOTCTRL_ENV_VERSION	"1"
+#define QUARD_BOOTCTRL_ENV_VERSION	"2"
 
 struct quard_sd_slot {
 	const char *name;
+	const char *boot_label;
+	const char *root_label;
 	const char *boot_part;
 	const char *root_part;
 	const char *active_system;
@@ -30,12 +32,16 @@ struct quard_sd_slot {
 static const struct quard_sd_slot quard_sd_slots[] = {
 	[RECOVERY_BANK_A] = {
 		.name = "a",
+		.boot_label = "boot_a",
+		.root_label = "rootfs_a",
 		.boot_part = "3",
 		.root_part = "4",
 		.active_system = "0",
 	},
 	[RECOVERY_BANK_B] = {
 		.name = "b",
+		.boot_label = "boot_b",
+		.root_label = "rootfs_b",
 		.boot_part = "5",
 		.root_part = "6",
 		.active_system = "1",
@@ -127,6 +133,12 @@ static int quard_sd_slot_export(u32 bank)
 	ret = env_set("active_system", slot->active_system);
 	if (ret)
 		return ret;
+	ret = env_set("sd_bootlabel", slot->boot_label);
+	if (ret)
+		return ret;
+	ret = env_set("sd_rootlabel", slot->root_label);
+	if (ret)
+		return ret;
 	ret = env_set("sd_bootpart", slot->boot_part);
 	if (ret)
 		return ret;
@@ -188,8 +200,9 @@ int quard_bootctrl_apply(void)
 		return ret;
 	}
 
-	printf("SD bootctrl: slot %s uses SD boot %s, rootfs %s\n",
-	       quard_sd_slots[bank].name, quard_sd_slots[bank].boot_part,
-	       quard_sd_slots[bank].root_part);
+	printf("SD bootctrl: slot %s uses SD %s/%s (fallback %s/%s)\n",
+	       quard_sd_slots[bank].name, quard_sd_slots[bank].boot_label,
+	       quard_sd_slots[bank].root_label,
+	       quard_sd_slots[bank].boot_part, quard_sd_slots[bank].root_part);
 	return 0;
 }
