@@ -9,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <sys/reboot.h>
 #include <linux/reboot.h>
+#include <mtd/mtd-user.h>
 #include <time.h>
 #include <stddef.h>
 
@@ -30,17 +31,10 @@
 #define RECOVERY_PART "recovery"
 #define DEFAULT_MTD_BY_NAME_DIR "/dev/mtd/by-name"
 
-#define MEMERASE                _IOW('M', 2, struct erase_info_user)
-
 #define VERSION_USER 0
 
 const char* banks_01[] = {"a", "b"};
 const char* banks_123[] = {"none", "a", "b", "ab"};
-
-struct erase_info_user {
-    uint32_t start;
-    uint32_t length;
-};
 
 struct image_partition_map {
     char *partition;
@@ -58,6 +52,33 @@ static int32_t ota_is_regular_file_fd(int32_t fd)
     }
 
     return S_ISREG(st.st_mode) ? 1 : 0;
+}
+
+static int32_t ota_get_mtd_size(int32_t fd, uint32_t fallback_size, uint32_t *size_out)
+{
+    struct stat st;
+    struct mtd_info_user info;
+
+    if (fd < 0 || size_out == NULL) {
+        return BH_OTA_ERROR_INVALID_PARAM;
+    }
+
+    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        if (st.st_size < 0 || (uint64_t)st.st_size > UINT32_MAX) {
+            return BH_OTA_ERROR;
+        }
+        *size_out = st.st_size == 0 ? fallback_size : (uint32_t)st.st_size;
+        return BH_OTA_OK;
+    }
+
+    memset(&info, 0, sizeof(info));
+    if (ioctl(fd, MEMGETINFO, &info) != 0) {
+        OTA_INFO_LOG_ERROR("Failed to query MTD geometry");
+        return BH_OTA_ERROR;
+    }
+
+    *size_out = info.size;
+    return BH_OTA_OK;
 }
 
 static int32_t ota_resolve_mtd_path(const char *partition, char *path, size_t path_len)
@@ -657,20 +678,21 @@ int32_t bh_hal_ota_flash_fsi_image(uint8_t *buf_addr, uint32_t buf_len, const ch
         return BH_OTA_ERROR;
     }
 
-    ret = get_partition_size_by_name(partition, TYPE_FLASH, &part_size);
+    if ((fd = open(mtd, O_SYNC | O_RDWR )) < 0) {
+        OTA_INFO_LOG_ERROR("Failed to open MTD device '%s'", mtd);
+        return BH_OTA_ERROR;
+    }
+
+    ret = ota_get_mtd_size(fd, buf_len, &part_size);
     if (ret != BH_OTA_OK) {
-        OTA_INFO_LOG_ERROR("Partition '%s' does not exist", partition);
-        return ret;
+        OTA_INFO_LOG_ERROR("Failed to determine partition '%s' size", partition);
+        goto close_fd;
     }
 
     if (buf_len > part_size) {
         OTA_INFO_LOG_ERROR("Buffer length %u is greater than partition '%s' size %u", buf_len, partition, part_size);
-        return BH_OTA_ERROR;
-    }
-
-    if ((fd = open(mtd, O_SYNC | O_RDWR )) < 0) {
-        OTA_INFO_LOG_ERROR("Failed to open MTD device '%s'", mtd);
-        return BH_OTA_ERROR;
+        ret = BH_OTA_ERROR;
+        goto close_fd;
     }
 
     crc32 = bh_hal_ota_crc32((uint8_t *)buf_addr, buf_len);
