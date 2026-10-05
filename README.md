@@ -43,13 +43,7 @@ Linux 6.6 + Buildroot
 
 AMP 默认内存规划如下，最终配置以设备树和链接脚本为准：
 
-| 用途 | 地址范围 | 大小 |
-| --- | --- | ---: |
-| OpenSBI | `0x40000000` - `0x401fffff` | 2 MiB |
-| U-Boot | `0x40200000` - `0x4032ffff` | 约 1.19 MiB |
-| Linux / RTOS 共享内存 | `0x6e400000` - `0x6e7fffff` | 4 MiB |
-| RTOS 代码和栈 | `0x6e800000` - `0x6effffff` | 8 MiB |
-| RTOS 堆 | `0x6f000000` - `0x6fffffff` | 16 MiB |
+
 
 ## 目录说明
 
@@ -92,7 +86,7 @@ sudo apt install -y \
 可用 `TRUSTED_CROSS_COMPILE` 覆盖 FreeRTOS 工具链，RT-Thread 则使用 `RTTHREAD_EXEC_PATH` 和 `RTTHREAD_CC_PREFIX`：
 
 ```bash
-make ampuboot_fit AMP_RTOS=freertos \
+make ampuboot_fit RTOS=freertos \
   TRUSTED_CROSS_COMPILE=/path/to/riscv64-unknown-elf- -j"$(nproc)"
 ```
 
@@ -110,6 +104,8 @@ git submodule update --init --recursive
 
 ## 快速构建
 
+**说明：** 官方 SDK 的增量编译存在一些问题，可能修改文件后，并不会真的重新编译，需要执行 touch xxx 来修改一下文件夹的时间，来触发重新编译
+
 ### 普通 Linux 镜像
 
 ```bash
@@ -119,108 +115,73 @@ make -j"$(nproc)"
 主要产物：
 
 ```text
-work/
-├── image.fit
-├── initramfs.cpio.gz
-├── u-boot-spl.bin.normal.out
-├── visionfive2_fw_payload.img
-└── linux/arch/riscv/boot/
-    ├── Image.gz
-    └── dts/starfive/*.dtb
+
 ```
 
 ### AMP 镜像（默认 FreeRTOS）
 
-```bash
-make ampuboot_fit AMP_RTOS=freertos -j"$(nproc)"
-make ampfit AMP_RTOS=freertos -j"$(nproc)"
-```
-
-切换到 RT-Thread：
+**官方 SDK 镜像产物参考：** [镜像信息](doc/使用手册/1.镜像信息.md)
 
 ```bash
-make amp-clean
-make ampuboot_fit AMP_RTOS=rtthread -j"$(nproc)"
-make ampfit AMP_RTOS=rtthread -j"$(nproc)"
+# 只构建并发布普通镜像到 work/target/normal
+./build.sh sdk build normal
+
+# 只构建并发布 AMP 镜像到 work/target/amp
+./build.sh sdk build amp
+
+# 同时构建并发布两组镜像（默认）
+./build.sh sdk build all
+
+# 拷贝到 tftp 指定目录
+sudo cp work/target/amp/u-boot-amp-spl.bin.normal.out \
+        work/target/amp/visionfive2_fw_payload_amp.img \
+        work/target/amp/image.fit \
+        work/target/amp/starfive-visionfive2-vfat.part \
+        work/target/amp/gpt.img \
+        work/target/amp/recovery.img /srv/tftp/
 ```
-
-切换 RTOS 前建议执行 `make amp-clean`，避免复用另一运行时的 AMP 中间产物。
-
-AMP 主要产物：
-
-| 文件 | 用途 |
-| --- | --- |
-| `work/u-boot-amp-spl.bin.normal.out` | AMP SPL，写入 SPI NOR `0x0` |
-| `work/visionfive2_fw_payload_amp.img` | OpenSBI + U-Boot + RTOS，写入 SPI NOR `0x100000` |
-| `work/amp/image.fit` | AMP Linux 内核、DTB 和 initramfs |
-| `work/amp/amp_rtos.bin` | 本次构建选中的 RTOS 原始固件 |
-
-也可以使用一键脚本完成工具链检查、普通镜像、AMP 镜像和 SD 卡镜像构建：
-
-```bash
-# 默认 FreeRTOS
-./script/build-rtthread-amp-sdk.sh
-
-# 选择 RT-Thread
-AMP_RTOS=rtthread ./script/build-rtthread-amp-sdk.sh
-```
-
-> 脚本名称保留了历史命名，但当前同时支持 FreeRTOS 和 RT-Thread。
 
 ### SD 卡镜像
 
 ```bash
-# 普通 Linux
-make buildroot_rootfs -j"$(nproc)"
+# 普通镜像
 make img
+# work/sdcard.img
 
-# AMP；AMP_RTOS 默认 freertos
-make amp_img AMP_RTOS=freertos -j"$(nproc)"
+# AMP镜像，默认 FreeRTOS
+make amp_img RTOS=freertos -j"$(nproc)"
+# work/sdcard_amp.img
 ```
 
-产物分别为 `work/sdcard.img` 和 `work/sdcard_amp.img`。
+构建并发布镜像到独立目录：
+
+```bash
+# work/target/normal/
+make publish_normal_images -j"$(nproc)"
+
+# work/target/amp/；RTOS 可选择 freertos 或 rtthread
+make publish_amp_images RTOS=freertos -j"$(nproc)"
+
+# 同时发布普通和 AMP 镜像
+make publish_all_images RTOS=freertos -j"$(nproc)"
+```
+
+AMP 发布目标生成并复制 SPL、fw_payload、FIT、FAT boot 分区和 rootfs
+产物；普通发布目标不包含 AMP FAT 分区镜像。发布目标不生成或发布
+`sdcard.img`、`sdcard_amp.img`。需要 SD 卡整盘镜像时请显式执行上面的
+`make img` 或 `make amp_img`。
 
 ## 烧录与启动
 
-### AMP SPI NOR 布局
-
-| SPI NOR 偏移 | 镜像 |
-| ---: | --- |
-| `0x0` | `u-boot-amp-spl.bin.normal.out` |
-| `0x100000` | `visionfive2_fw_payload_amp.img` |
-
-通过 TFTP 在 U-Boot 中更新固件的示例：
-
-```bash
-setenv ipaddr 192.168.5.9
-setenv serverip 192.168.5.11
-
-sf probe
-tftpboot ${loadaddr} u-boot-amp-spl.bin.normal.out
-sf update ${loadaddr} 0x0 ${filesize}
-
-tftpboot ${loadaddr} visionfive2_fw_payload_amp.img
-sf update ${loadaddr} 0x100000 ${filesize}
-```
-
-加载 AMP Linux FIT：
-
-```bash
-tftpboot ${loadaddr} image.fit
-bootm ${loadaddr}
-```
-
-完整的拨码、TFTP、NOR 校验、SD 卡启动和 SSH 操作见 [AMP 启动说明](doc/软件文档/2.AMP启动.md)。
-
-> **警告：** `sf erase`、`sf update`、`dd` 和 `make DISK=/dev/... format-boot-loader` 会改写 Flash 或磁盘。执行前必须核对目标设备和镜像，错误的设备名可能导致数据不可恢复。
+**参考如下文档：** [刷写命令](doc/使用手册/2.刷写命令.md)
 
 ## AMP 联调
 
 构建 Linux 侧 Mailbox 模块和日志程序并安装到 `nfs_rootfs/`：
 
 ```bash
-./bsp/ipi_mailbox/build.sh
-./app/build.sh
+./build.sh bsp build
+./build.sh app build
 ```
 
 板端通过 NFS 挂载该目录后，按依赖顺序加载：
@@ -237,8 +198,8 @@ bootm ${loadaddr}
 make vmlinux                         # Linux 内核、模块和 DTB
 make uboot                           # 普通 U-Boot
 make fit                             # 普通 Linux FIT
-make ampuboot_fit AMP_RTOS=freertos # AMP SPL 与 fw_payload
-make ampfit AMP_RTOS=freertos       # AMP Linux FIT
+make ampuboot_fit RTOS=freertos # AMP SPL 与 fw_payload
+make ampfit RTOS=freertos       # AMP Linux FIT
 make buildroot_rootfs                # Buildroot ext4 rootfs
 make linux-menuconfig                # Linux 配置
 make uboot-menuconfig                # U-Boot 配置
@@ -249,41 +210,9 @@ make clean                           # 清理主要构建产物
 make distclean                       # 删除整个 work/，下次将完整重编
 ```
 
-## OTA 子系统
-
-OTA 代码当前分为以下部分：
-
-- `basic_middleware/ota_package/`：OTA 包解析、校验和写入流程。
-- `basic_middleware/ota_info/`：设备分区、版本与 recovery 状态访问。
-- `basic_middleware/ota_client/`：板端查询、下载、解包、安装和状态命令。
-- `ota_server/`：发布版本、静态文件服务和管理接口。
-
-入口文档：
-
-- [OTA 总体说明](doc/OTA.md)
-- [OTA Client](basic_middleware/ota_client/README.md)
-- [OTA Server](ota_server/README.md)
-- [A/B 启动实现记录](doc/OTA%20ab分区启动实现记录.md)
-
-OTA 会修改启动分区和 SPI-NOR 状态区，进行真机测试前请先确认分区表、当前 bank 和回滚路径。
-
-## 文档索引
-
-- [启动流程与镜像说明](doc/软件文档/1.启动流程.md)
-- [AMP 启动与刷写](doc/软件文档/2.AMP启动.md)
-- [Buildroot、NFS、SSH 与 Minicom](doc/软件文档/3.buildroot使用.md)
-- [SDK 下载与编译](doc/软件文档/SDK下载与编译说明.md)
-- [VisionFive 2 移植方案](doc/方案文档/移植方案-VisionFive2.md)
-- [日志收集方案](doc/方案文档/日志收集方案.md)
-- [FreeRTOS 启动调试记录](doc/调试文档/1.FreeRTOS%20启动调试记录.md)
-- [IPI Mailbox 调试记录](doc/调试文档/2.IPI_Mailbox%20通信调试记录.md)
-- [FreeRTOS SSIP / IPI 调试记录](doc/调试文档/3.FreeRTOS-SSIP与IPI-Mailbox调试记录.md)
-- [Remote Shell 调试记录](doc/调试文档/4.Remote-Shell回显问题调试记录.md)
-- [日志落盘实现记录](doc/日志落盘实现记录.md)
-
 ## 当前开发注意事项
 
-- AMP 默认运行时是 FreeRTOS；RT-Thread 通过 `AMP_RTOS=rtthread` 选择。
+- AMP 默认运行时是 FreeRTOS；RT-Thread 通过 `RTOS=rtthread` 选择。
 - `conf/amp_rootfs_post_build.sh` 内含开发环境默认网络：板端 `192.168.5.9`、NFS 主机 `192.168.5.11`。
 - NFS 自动挂载默认导出路径为 `/home/xikao/VisionFive2_6.6/nfs_rootfs`，换主机时需要修改。
 - 仓库中可能存在本机构建生成的 `.ko`、目标文件和服务端数据；正式发布前应按需清理并确认 `.gitignore`。
