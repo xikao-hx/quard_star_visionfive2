@@ -37,6 +37,13 @@ buildroot_rootfs_wrkdir := $(wrkdir)/buildroot_rootfs
 buildroot_rootfs_ext := $(buildroot_rootfs_wrkdir)/images/rootfs.ext4
 buildroot_rootfs_config := $(confdir)/buildroot_rootfs_config
 amp_rootfs_post_build := $(confdir)/amp_rootfs_post_build.sh
+ota_rootfs_sources := $(shell find \
+	$(srcdir)/basic_middleware/ota_info \
+	$(srcdir)/basic_middleware/ota_package \
+	$(srcdir)/basic_middleware/ota_client \
+	-path '*/build' -prune -o -type f -print)
+ota_rootfs_inputs := $(wildcard $(confdir)/ota/* $(confdir)/ota/keys/*) \
+	$(srcdir)/tools/script/ota_release.sh
 busybox_nfs_config := $(confdir)/busybox-nfs.config
 util_linux_config := $(buildroot_srcdir)/package/util-linux/Config.in
 util_linux_makefile := $(buildroot_srcdir)/package/util-linux/util-linux.mk
@@ -264,6 +271,7 @@ $(buildroot_rootfs_wrkdir)/.config: $(buildroot_srcdir) \
 $(buildroot_rootfs_ext): $(buildroot_srcdir) \
 		$(buildroot_rootfs_wrkdir)/.config $(target_gcc) \
 		$(buildroot_rootfs_config) $(amp_rootfs_post_build) \
+		$(ota_rootfs_sources) $(ota_rootfs_inputs) \
 		$(busybox_nfs_config) $(buildroot_initramfs_init) $(version) \
 		$(util_linux_config) $(util_linux_makefile) $(perf_tool_wrkdir)/perf
 	mkdir -p $(buildroot_rootfs_wrkdir)/target/lib
@@ -271,7 +279,8 @@ $(buildroot_rootfs_ext): $(buildroot_srcdir) \
 	mkdir -p $(buildroot_rootfs_wrkdir)/target/usr/bin
 	cp $(perf_tool_wrkdir)/perf $(buildroot_rootfs_wrkdir)/target/usr/bin/
 	cp $(version) $(buildroot_rootfs_wrkdir)/target/usr/bin/version
-	$(MAKE) -C $< RISCV=$(RISCV) PATH=$(RVPATH) O=$(buildroot_rootfs_wrkdir)
+	AMP_ROOTFS_INCLUDE_OTA=1 $(MAKE) -C $< RISCV=$(RISCV) PATH=$(RVPATH) \
+		O=$(buildroot_rootfs_wrkdir)
 
 .PHONY: buildroot_rootfs
 buildroot_rootfs: $(buildroot_rootfs_ext)

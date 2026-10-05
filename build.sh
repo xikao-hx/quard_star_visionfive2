@@ -32,8 +32,8 @@ Commands:
 
 Package example:
   ./build.sh keygen
-  ./build.sh package --sys-version 1.2.4 \
-    --rollback-index 10204 --session-id 20260908-001 \
+  # Set the release version once in conf/ota/sys-version.
+  ./build.sh package --rollback-index 10204 --session-id 20260908-001 \
     --target-bank b --include-stage2
 
 Environment:
@@ -44,6 +44,8 @@ Environment:
   CROSS_COMPILE=<prefix>     Component cross-compiler prefix
   TRUSTED_CROSS_COMPILE=<prefix>
                              FreeRTOS bare-metal compiler prefix
+  OTA_SYS_VERSION_FILE=<path>
+                             Controlled version file (default: conf/ota/sys-version)
 EOF
 }
 
@@ -140,9 +142,9 @@ run_ota()
 
     "$repo_dir/basic_middleware/ota_info/build.sh" "variant=$variant" "$flag"
     "$repo_dir/basic_middleware/ota_package/build.sh" "variant=$variant" "$flag"
-    # if [[ "$action" == "build" || "$action" == "install" || "$action" == "all" ]]; then
-    #     "$repo_dir/basic_middleware/ota_client/build.sh"
-    # fi
+    if [[ "$action" == "build" || "$action" == "install" || "$action" == "all" ]]; then
+        "$repo_dir/basic_middleware/ota_client/build.sh"
+    fi
 }
 
 run_keygen()
