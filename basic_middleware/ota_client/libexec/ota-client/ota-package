@@ -1,0 +1,402 @@
+#!/bin/sh
+
+OTA_LIB_DIR=${OTA_LIB_DIR:-/lib/ota}
+
+TAR_BIN=${OTA_CLIENT_TAR_BIN:-tar}
+OTA_PACKAGE_BIN=${OTA_CLIENT_OTA_PACKAGE_BIN:-/bin/ota_package}
+REBOOT_BIN=${OTA_CLIENT_REBOOT_BIN:-reboot}
+UNPACK_HEARTBEAT_INTERVAL_SEC=${OTA_CLIENT_UNPACK_HEARTBEAT_INTERVAL_SEC:-30}
+COMMAND_LOCK_NAME=package
+
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/logging.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/utils.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/locking.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/state.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/config.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/health.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/network.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/api.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/command.sh"
+
+cleanup_package_dir()
+{
+    case "$OTA_PACKAGE_DIR" in
+        ''|/)
+            error "unpack failed: invalid ota package dir"
+            return 1
+            ;;
+    esac
+
+    [ ! -d "$OTA_PACKAGE_DIR" ] || rm -rf "$OTA_PACKAGE_DIR"
+    mkdir -p "$(dirname "$OTA_PACKAGE_DIR")" 2>/dev/null || true
+}
+
+cleanup_completed_ota_data()
+{
+    for cleanup_path in "$DOWNLOAD_DIR" "$OTA_PACKAGE_DIR" "/userdata/ota/package"; do
+        case "$cleanup_path" in
+            /userdata/ota/*)
+                if [ -e "$cleanup_path" ]; then
+                    rm -rf "$cleanup_path"
+                    stage_log "cleanup" "success" "path=$cleanup_path"
+                fi
+                ;;
+            ''|/)
+                warn "stage=cleanup event=skip reason=invalid_path path=${cleanup_path:-empty}"
+                ;;
+            *)
+                warn "stage=cleanup event=skip reason=outside_userdata path=$cleanup_path"
+                ;;
+        esac
+    done
+}
+
+print_command_output()
+{
+    [ -z "$1" ] || printf '%s\n' "$1"
+}
+
+run_ota_step()
+{
+    stage_name=$1
+    reason_code=$2
+    shift 2
+
+    stage_boundary "$stage_name" "started"
+    stage_log "$stage_name" "started"
+    output=$("$@" 2>&1)
+    status=$?
+    print_command_output "$output"
+
+    if [ "$status" -ne 0 ]; then
+        stage_log "$stage_name" "failed"
+        stage_boundary "$stage_name" "failed"
+        return "$status"
+    fi
+
+    stage_log "$stage_name" "success"
+    stage_boundary "$stage_name" "success"
+    return 0
+}
+
+require_install_inputs()
+{
+    ensure_command "$OTA_PACKAGE_BIN" "ota_package" || return 1
+    if [ ! -d "$OTA_PACKAGE_DIR" ]; then
+        error "$1 failed: package dir missing $OTA_PACKAGE_DIR"
+        return 1
+    fi
+    if [ ! -f "$PUBLIC_KEY_PATH" ]; then
+        error "$1 failed: public key missing $PUBLIC_KEY_PATH"
+        return 1
+    fi
+}
+
+resolve_unpacked_package_dir()
+{
+    base_dir=$1
+    if [ -f "$base_dir/data.json" ]; then
+        printf '%s\n' "$base_dir"
+        return 0
+    fi
+    if [ -f "$base_dir/ota_package/data.json" ]; then
+        printf '%s\n' "$base_dir/ota_package"
+        return 0
+    fi
+
+    candidate=$(find "$base_dir" -mindepth 2 -maxdepth 3 -type f -name data.json 2>/dev/null | sed -n '1p')
+    [ -z "$candidate" ] || dirname "$candidate"
+}
+
+validate_unpacked_package()
+{
+    package_dir=$1
+    for required in data.json manifest.hash signature.sig; do
+        if [ ! -f "$package_dir/$required" ]; then
+            error "unpack failed: missing $required"
+            return 1
+        fi
+        stage_log "unpack" "progress" "validated_file=$required"
+    done
+
+    payload_found=0
+    for payload_file in $(extract_json_payload_files "$package_dir/data.json"); do
+        payload_found=1
+        if [ ! -f "$package_dir/$payload_file" ]; then
+            error "unpack failed: missing payload file $payload_file"
+            return 1
+        fi
+        payload_bytes=$(wc -c < "$package_dir/$payload_file" 2>/dev/null | tr -d ' ')
+        stage_log "unpack" "progress" "validated_payload=$payload_file payload_bytes=$payload_bytes"
+    done
+    if [ "$payload_found" -eq 0 ]; then
+        error "unpack failed: no payload files declared"
+        return 1
+    fi
+
+    SESSION_ID=$(extract_json_string "session_id" "$package_dir/data.json")
+    manifest_version=$(extract_json_string "sys_version" "$package_dir/data.json")
+    require_value "session_id" "$SESSION_ID" || return 1
+    require_value "sys_version" "$manifest_version" || return 1
+    if [ "$manifest_version" != "$TARGET_VERSION" ]; then
+        error "unpack failed: target_version mismatch release=$TARGET_VERSION manifest=$manifest_version"
+        return 1
+    fi
+}
+
+cmd_unpack()
+{
+    command_begin "unpack" 1 1 1 0 1 || return 1
+    heartbeat_interval_sec=$(normalize_positive_uint "$UNPACK_HEARTBEAT_INTERVAL_SEC" 30)
+    heartbeat_elapsed_sec=0
+
+    if [ ! -f "$ARCHIVE_PATH" ]; then
+        error "unpack failed: archive missing $ARCHIVE_PATH"
+        safe_report_stage_result "unpack" "failed" "UNPACK_FAILED" \
+            "archive missing" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    fi
+    cleanup_package_dir || {
+        command_end "failed" 1
+        return $?
+    }
+
+    stage_log "unpack" "started" "archive_path=$ARCHIVE_PATH"
+    safe_report_stage_result "unpack" "started" "" "" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+    err_file=$(mktemp)
+    "$TAR_BIN" -xzf "$ARCHIVE_PATH" -C "$(dirname "$OTA_PACKAGE_DIR")" 2>"$err_file" &
+    tar_pid=$!
+    while kill -0 "$tar_pid" 2>/dev/null; do
+        sleep 1
+        heartbeat_elapsed_sec=$((heartbeat_elapsed_sec + 1))
+        if [ $((heartbeat_elapsed_sec % heartbeat_interval_sec)) -eq 0 ]; then
+            stage_log "unpack" "progress" "heartbeat=extracting elapsed_sec=$heartbeat_elapsed_sec archive=$(strip_file_basename "$ARCHIVE_PATH")"
+        fi
+    done
+    if ! wait "$tar_pid"; then
+        error "unpack failed: tar extract failed: $(read_wget_error "$err_file")"
+        rm -f "$err_file"
+        safe_report_stage_result "unpack" "failed" "UNPACK_FAILED" \
+            "tar extract failed" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    fi
+    rm -f "$err_file"
+
+    resolved_package_dir=$(resolve_unpacked_package_dir "$(dirname "$OTA_PACKAGE_DIR")")
+    if [ -z "$resolved_package_dir" ]; then
+        error "unpack failed: missing data.json"
+        safe_report_stage_result "unpack" "failed" "UNPACK_FAILED" \
+            "missing data.json" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    fi
+    OTA_PACKAGE_DIR=$resolved_package_dir
+
+    if ! validate_unpacked_package "$OTA_PACKAGE_DIR"; then
+        safe_report_stage_result "unpack" "failed" "UNPACK_FAILED" \
+            "ota package validation failed" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    fi
+
+    persist_release_state
+    stage_log "unpack" "success" "package_dir=$OTA_PACKAGE_DIR data_json=$OTA_PACKAGE_DIR/data.json"
+    safe_report_stage_result "unpack" "success" "" "" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+    command_end "success"
+}
+
+cmd_install()
+{
+    command_begin "install" 1 1 1 0 1 || return 1
+    require_install_inputs "install" || {
+        command_end "failed" 1
+        return $?
+    }
+
+    stage_log "install" "started" "release_id=$RELEASE_ID target_version=$TARGET_VERSION package_dir=$OTA_PACKAGE_DIR"
+    safe_report_stage_result "stage1_start" "started" "" "" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+
+    run_ota_step "verify" "VERIFY_FAILED" "$OTA_PACKAGE_BIN" verify_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" &&
+    run_ota_step "write" "INSTALL_STAGE1_FAILED" "$OTA_PACKAGE_BIN" apply_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" &&
+    run_ota_step "commit" "COMMIT_STAGE1_FAILED" "$OTA_PACKAGE_BIN" commit_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" || {
+        safe_report_stage_result "stage1_end" "failed" "STAGE1_FAILED" \
+            "stage1 failed" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    }
+
+    safe_report_stage_result "stage1_end" "success" "" "" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+    stage_log "install" "success" "release_id=$RELEASE_ID target_version=$TARGET_VERSION"
+    command_end "success"
+    stage_log "install" "reboot" "reason=stage1_end"
+    "$REBOOT_BIN" -f
+}
+
+cmd_service_start()
+{
+    OTA_CLIENT_CREATE_RUNTIME_DIRS=0
+    OTA_CLIENT_PERSIST_LOG=0
+    command_begin "service_start" 1 1 0 0 1 || return 1
+    require_userdata_health || {
+        command_end "failed" 1
+        return $?
+    }
+    OTA_CLIENT_PERSIST_LOG=1
+
+    if [ ! -f "$PACKAGE_STATE_FILE" ] && [ ! -f "$RELEASE_STATE_FILE" ]; then
+        stage_log "service_start" "skip" "reason=release_state_missing"
+        command_end "skipped"
+        return $?
+    fi
+    load_release_state || {
+        command_end "failed" 1
+        return $?
+    }
+    require_install_inputs "service_start" || {
+        command_end "failed" 1
+        return $?
+    }
+    ensure_command "$OTA_INFO_BIN" "ota_info" || {
+        command_end "failed" 1
+        return $?
+    }
+
+    ota_state=$(read_ota_state_value) || {
+        error "service_start failed: failed to read ota_state"
+        command_end "failed" 1
+        return $?
+    }
+    stage_log "service_start" "started" "package_dir=$OTA_PACKAGE_DIR"
+    stage_log "service_start" "progress" "ota_state=$(ota_state_name "$ota_state") ota_state_value=$ota_state"
+    reboot_reason=
+    cleanup_after_success=0
+
+    case "$ota_state" in
+        0)
+            stage_log "service_start" "skip" "reason=no_pending_state ota_state=idle ota_state_value=$ota_state"
+            ;;
+        11)
+            safe_report_stage_result "stage1_start" "started" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            run_ota_step "verify" "VERIFY_FAILED" "$OTA_PACKAGE_BIN" verify_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" &&
+            run_ota_step "write" "INSTALL_STAGE1_FAILED" "$OTA_PACKAGE_BIN" apply_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" &&
+            run_ota_step "commit" "COMMIT_STAGE1_FAILED" "$OTA_PACKAGE_BIN" commit_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" ||
+                {
+                    safe_report_stage_result "stage1_end" "failed" "STAGE1_FAILED" \
+                        "stage1 failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                    command_end "failed" 1
+                    return $?
+                }
+            safe_report_stage_result "stage1_end" "success" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            reboot_reason=stage1_end
+            ;;
+        12)
+            safe_report_stage_result "stage1_start" "started" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            run_ota_step "commit" "COMMIT_STAGE1_FAILED" "$OTA_PACKAGE_BIN" commit_stage1 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" ||
+                {
+                    safe_report_stage_result "stage1_end" "failed" "STAGE1_FAILED" \
+                        "stage1 failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                    command_end "failed" 1
+                    return $?
+                }
+            safe_report_stage_result "stage1_end" "success" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            reboot_reason=stage1_end
+            ;;
+        13|14)
+            run_boot_health_gate || {
+                safe_report_stage_result "health_check" "failed" "HEALTH_CHECK_FAILED" \
+                    "boot health gate failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                command_end "failed" 1
+                return $?
+            }
+            safe_report_stage_result "stage2_start" "started" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            run_ota_step "stage2_verify" "STAGE2_VERIFY_FAILED" "$OTA_PACKAGE_BIN" verify_stage2 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" &&
+            run_ota_step "stage2_apply" "STAGE2_APPLY_FAILED" "$OTA_PACKAGE_BIN" apply_stage2 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" &&
+            run_ota_step "stage2_commit" "STAGE2_COMMIT_FAILED" "$OTA_PACKAGE_BIN" commit_stage2 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" ||
+                {
+                    safe_report_stage_result "stage2_end" "failed" "STAGE2_FAILED" \
+                        "stage2 failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                    command_end "failed" 1
+                    return $?
+                }
+            safe_report_stage_result "stage2_end" "success" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            reboot_reason=stage2_end
+            ;;
+        15)
+            run_boot_health_gate || {
+                safe_report_stage_result "health_check" "failed" "HEALTH_CHECK_FAILED" \
+                    "boot health gate failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                command_end "failed" 1
+                return $?
+            }
+            safe_report_stage_result "stage2_start" "started" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            run_ota_step "stage2_commit" "STAGE2_COMMIT_FAILED" "$OTA_PACKAGE_BIN" commit_stage2 "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" ||
+                {
+                    safe_report_stage_result "stage2_end" "failed" "STAGE2_FAILED" \
+                        "stage2 failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                    command_end "failed" 1
+                    return $?
+                }
+            safe_report_stage_result "stage2_end" "success" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            reboot_reason=stage2_end
+            ;;
+        16)
+            run_boot_health_gate || {
+                safe_report_stage_result "health_check" "failed" "HEALTH_CHECK_FAILED" \
+                    "boot health gate failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                command_end "failed" 1
+                return $?
+            }
+            run_ota_step "boot_success" "BOOT_SUCCESS_FAILED" "$OTA_PACKAGE_BIN" boot_success "$OTA_PACKAGE_DIR" "$PUBLIC_KEY_PATH" ||
+                {
+                    safe_report_stage_result "boot_success" "failed" "BOOT_SUCCESS_FAILED" \
+                        "boot_success failed" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+                    command_end "failed" 1
+                    return $?
+                }
+            safe_report_stage_result "boot_success" "success" "" "" "$CURRENT_VERSION" "$TARGET_VERSION" || true
+            clear_release_state
+            cleanup_after_success=1
+            ;;
+        17)
+            stage_log "service_start" "skip" "reason=already_complete release_state=cleanup"
+            clear_release_state
+            cleanup_after_success=1
+            ;;
+        *)
+            stage_log "service_start" "skip" "reason=unsupported_state ota_state=$(ota_state_name "$ota_state") ota_state_value=$ota_state"
+            ;;
+    esac
+
+    stage_log "service_start" "success" "release_id=${RELEASE_ID:-none}"
+    command_end "success"
+    status=$?
+    if [ "$status" -eq 0 ] && [ "$cleanup_after_success" -eq 1 ]; then
+        cleanup_completed_ota_data
+    fi
+    if [ -n "$reboot_reason" ]; then
+        stage_log "service_start" "reboot" "reason=$reboot_reason"
+        if ! "$REBOOT_BIN" -f; then
+            error "stage=service_start event=failed reason=reboot_failed reboot_reason=$reboot_reason"
+            return 1
+        fi
+    fi
+    return "$status"
+}
+
+case "${1:-}" in
+    unpack)        cmd_unpack ;;
+    install)       cmd_install ;;
+    service_start) cmd_service_start ;;
+    *)             exit 1 ;;
+esac

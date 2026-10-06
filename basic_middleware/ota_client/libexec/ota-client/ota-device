@@ -1,0 +1,66 @@
+#!/bin/sh
+
+OTA_LIB_DIR=${OTA_LIB_DIR:-/lib/ota}
+
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/logging.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/utils.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/state.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/config.sh"
+
+cmd_identity()
+{
+    load_identity || return 1
+    printf 'device_id=%s\n' "$DEVICE_ID"
+    printf 'board_type=%s\n' "$BOARD_TYPE"
+    printf 'hardware_version=%s\n' "$HARDWARE_VERSION"
+    printf 'network_iface=%s\n' "$NETWORK_IFACE"
+    printf 'mac=%s\n' "$MAC_ADDR"
+    printf 'current_version=%s\n' "$CURRENT_VERSION"
+}
+
+cmd_config()
+{
+    load_client_config || return 1
+    printf 'server_url=%s\n' "$SERVER_URL"
+    printf 'manifest_url=%s\n' "$MANIFEST_URL"
+    printf 'download_dir=%s\n' "$DOWNLOAD_DIR"
+    printf 'log_path=%s\n' "$LOG_PATH"
+    printf 'public_key_path=%s\n' "$PUBLIC_KEY_PATH"
+    printf 'request_timeout_sec=%s\n' "$REQUEST_TIMEOUT"
+    printf 'retry_count=%s\n' "$RETRY_COUNT"
+    printf 'network_iface=%s\n' "$NETWORK_IFACE"
+    printf 'eeprom_identity_path=%s\n' "$EEPROM_IDENTITY_PATH"
+    printf 'identity_config=%s\n' "$IDENTITY_CONFIG"
+    printf 'ota_package_dir=%s\n' "$OTA_PACKAGE_DIR"
+    printf 'health_check_dir=%s\n' "$HEALTH_CHECK_DIR"
+}
+
+cmd_state()
+{
+    load_client_config || return 1
+    load_identity || return 1
+    load_release_state || return 1
+
+    recovery_state=$(read_ota_state_value 2>/dev/null || true)
+    printf 'release_id=%s\n' "$RELEASE_ID"
+    printf 'board_type=%s\n' "$RELEASE_BOARD_TYPE"
+    printf 'target_version=%s\n' "$TARGET_VERSION"
+    printf 'package_url=%s\n' "$PACKAGE_URL"
+    printf 'session_id=%s\n' "$SESSION_ID"
+    printf 'source_version=%s\n' "$SOURCE_VERSION"
+    printf 'archive_path=%s\n' "$ARCHIVE_PATH"
+    printf 'package_dir=%s\n' "$OTA_PACKAGE_DIR"
+    printf 'recovery_state=%s\n' "$(ota_state_name "$recovery_state")"
+    printf 'recovery_state_value=%s\n' "$recovery_state"
+}
+
+case "${1:-}" in
+    identity) cmd_identity ;;
+    config)   cmd_config ;;
+    state)    cmd_state ;;
+    *)        exit 1 ;;
+esac

@@ -1,0 +1,201 @@
+#!/bin/sh
+
+OTA_LIB_DIR=${OTA_LIB_DIR:-/lib/ota}
+
+SHA256SUM_BIN=${OTA_CLIENT_SHA256SUM_BIN:-sha256sum}
+PRINT_CHECK_RESPONSE=${OTA_CLIENT_PRINT_CHECK_RESPONSE:-0}
+FETCH_RELEASE_RC_NO_UPDATE=${FETCH_RELEASE_RC_NO_UPDATE:-20}
+
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/logging.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/utils.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/locking.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/state.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/config.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/network.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/api.sh"
+# shellcheck disable=SC1090
+. "$OTA_LIB_DIR/command.sh"
+
+cmd_register()
+{
+    command_begin "register" 1 1 0 1 0 || return 1
+    response_file=$(mktemp)
+    stage_log "register" "started" "device_id=$DEVICE_ID board_type=$BOARD_TYPE"
+    payload=$(printf '{"device_id":"%s","board_type":"%s","hardware_version":"%s","mac":"%s","current_version":"%s"}' \
+        "$(json_escape "$DEVICE_ID")" "$(json_escape "$BOARD_TYPE")" \
+        "$(json_escape "$HARDWARE_VERSION")" "$(json_escape "$MAC_ADDR")" \
+        "$(json_escape "$CURRENT_VERSION")")
+
+    if ! post_json "/api/v1/devices/register" "$payload" "$response_file"; then
+        rm -f "$response_file"
+        error "register failed: device_id=$DEVICE_ID"
+        command_end "failed" 1
+        return $?
+    fi
+
+    if ! grep -q '"code"[[:space:]]*:[[:space:]]*0' "$response_file"; then
+        error "register failed: device_id=$DEVICE_ID"
+        cat "$response_file" >&2
+        rm -f "$response_file"
+        command_end "failed" 1
+        return $?
+    fi
+
+    stage_log "register" "success" "device_id=$DEVICE_ID board_type=$BOARD_TYPE"
+    cat "$response_file"
+    printf '\n'
+    rm -f "$response_file"
+    command_end "success"
+}
+
+cmd_check()
+{
+    command_begin "check" 1 1 0 1 0 || return 1
+    response_file=$(mktemp)
+    stage_log "check" "started" "device_id=$DEVICE_ID current_version=$CURRENT_VERSION manifest_url=$MANIFEST_URL"
+
+    fetch_release_from_server "$response_file"
+    status=$?
+    if [ "$status" -eq "$FETCH_RELEASE_RC_NO_UPDATE" ]; then
+        stage_log "check" "success" "has_update=false device_id=$DEVICE_ID"
+        if should_print_check_response; then
+            cat "$response_file"
+            printf '\n'
+        fi
+        rm -f "$response_file"
+        command_end "no_update"
+        return $?
+    fi
+    if [ "$status" -ne 0 ]; then
+        rm -f "$response_file"
+        command_end "failed" 1
+        return $?
+    fi
+
+    stage_log "check" "success" "has_update=true release_id=$RELEASE_ID package_url=$PACKAGE_URL"
+    if should_print_check_response; then
+        cat "$response_file"
+        printf '\n'
+    fi
+    rm -f "$response_file"
+    command_end "success"
+}
+
+download_archive()
+{
+    attempt=0
+    max_attempts=$((RETRY_COUNT + 1))
+    mkdir -p "$DOWNLOAD_DIR" 2>/dev/null || true
+
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        attempt=$((attempt + 1))
+        err_file=$(mktemp)
+        "$WGET_BIN" -q -c -T "$REQUEST_TIMEOUT" -O "$PARTIAL_ARCHIVE_PATH" "$PACKAGE_URL" 2>"$err_file" &
+        download_pid=$!
+
+        while kill -0 "$download_pid" 2>/dev/null; do
+            sleep 1
+            current_size=0
+            if [ -f "$PARTIAL_ARCHIVE_PATH" ]; then
+                current_size=$(wc -c < "$PARTIAL_ARCHIVE_PATH" 2>/dev/null | tr -d ' ')
+            fi
+            [ -n "$current_size" ] || current_size=0
+            if [ "${ACTIVE_STAGE_LOGGED_SIZE:-}" != "$current_size" ]; then
+                ACTIVE_STAGE_LOGGED_SIZE=$current_size
+                stage_log "download" "progress" "downloaded_bytes=$current_size release_id=$RELEASE_ID"
+            fi
+        done
+
+        if wait "$download_pid"; then
+            mv -f "$PARTIAL_ARCHIVE_PATH" "$ARCHIVE_PATH"
+            rm -f "$err_file"
+            LAST_WGET_ERROR=
+            return 0
+        fi
+
+        log_wget_failure "download" "$err_file"
+        rm -f "$err_file"
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            info "retry $attempt/$RETRY_COUNT for download $PACKAGE_URL"
+        fi
+    done
+
+    error "download failed: release_id=$RELEASE_ID"
+    return 1
+}
+
+verify_archive_sha256()
+{
+    require_value "package_sha256" "$PACKAGE_SHA256" || return 1
+    if ! command -v "$SHA256SUM_BIN" >/dev/null 2>&1; then
+        error "sha256sum missing: $SHA256SUM_BIN"
+        return 1
+    fi
+
+    archive_sha256=$("$SHA256SUM_BIN" "$ARCHIVE_PATH" 2>/dev/null | awk '{print $1}' | sed -n '1p')
+    archive_sha256=$(trim_value "$archive_sha256")
+    if [ "$archive_sha256" != "$PACKAGE_SHA256" ]; then
+        error "download failed: sha256 mismatch expected=$PACKAGE_SHA256 actual=$archive_sha256"
+        return 1
+    fi
+
+    stage_log "download" "progress" "sha256_verified=true archive_sha256=$archive_sha256"
+}
+
+cmd_download()
+{
+    command_begin "download" 1 1 0 1 1 || return 1
+    response_file=$(mktemp)
+
+    fetch_release_from_server "$response_file"
+    status=$?
+    rm -f "$response_file"
+    if [ "$status" -eq "$FETCH_RELEASE_RC_NO_UPDATE" ]; then
+        error "download failed: no update available"
+        command_end "failed" 1
+        return $?
+    fi
+    if [ "$status" -ne 0 ]; then
+        command_end "failed" 1
+        return $?
+    fi
+
+    persist_release_state
+    stage_log "download" "started" "release_id=$RELEASE_ID target_version=$TARGET_VERSION package_url=$PACKAGE_URL"
+    safe_report_stage_result "download" "started" "" "" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+
+    if ! download_archive; then
+        safe_report_stage_result "download" "failed" "DOWNLOAD_FAILED" \
+            "${LAST_WGET_ERROR:-download failed after retries}" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    fi
+    if ! verify_archive_sha256; then
+        rm -f "$ARCHIVE_PATH"
+        safe_report_stage_result "download" "failed" "DOWNLOAD_SHA256_MISMATCH" \
+            "download sha256 verification failed" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+        command_end "failed" 1
+        return $?
+    fi
+
+    archive_bytes=$(wc -c < "$ARCHIVE_PATH" 2>/dev/null | tr -d ' ')
+    stage_log "download" "success" "archive_path=$ARCHIVE_PATH archive_bytes=$archive_bytes"
+    safe_report_stage_result "download" "success" "" "" "$SOURCE_VERSION" "$TARGET_VERSION" || true
+    DOWNLOAD_REPORTED=1
+    persist_release_state
+    command_end "success"
+}
+
+case "${1:-}" in
+    register) cmd_register ;;
+    check)    cmd_check ;;
+    download) cmd_download ;;
+    *)        exit 1 ;;
+esac
