@@ -42,7 +42,7 @@ ota_rootfs_sources := $(shell find \
 	$(srcdir)/basic_middleware/ota_package \
 	$(srcdir)/basic_middleware/ota_client \
 	-path '*/build' -prune -o -type f -print)
-ota_rootfs_inputs := $(wildcard $(confdir)/ota/* $(confdir)/ota/keys/*) \
+ota_rootfs_inputs := $(shell find $(srcdir)/target_root_script -type f -print) \
 	$(srcdir)/tools/script/ota_release.sh
 busybox_nfs_config := $(confdir)/busybox-nfs.config
 util_linux_config := $(buildroot_srcdir)/package/util-linux/Config.in

@@ -6,6 +6,58 @@ target_dir="$1"
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 project_dir=$(dirname "$script_dir")
 
+install_ota_runtime()
+{
+	ota_info_dir="$project_dir/basic_middleware/ota_info"
+	ota_package_dir="$project_dir/basic_middleware/ota_package"
+	ota_client_dir="$project_dir/basic_middleware/ota_client"
+	ota_conf_dir="$project_dir/target_root_script/etc/ota"
+	toolchain_prefix="$project_dir/work/buildroot_initramfs/host/bin/riscv64-buildroot-linux-gnu-"
+	target_sysroot="$project_dir/work/buildroot_rootfs/host/riscv64-buildroot-linux-gnu/sysroot"
+
+	# shellcheck source=tools/script/ota_release.sh
+	. "$project_dir/tools/script/ota_release.sh"
+	ota_version=$(ota_read_sys_version "$ota_conf_dir/sys-version")
+
+	for required_file in \
+		"$ota_conf_dir/client.conf" \
+		"$ota_conf_dir/device_identity.conf" \
+		"$ota_conf_dir/keys/ota_public.pem" \
+		"$target_sysroot/usr/lib/libcrypto.so.1.1"; do
+		if [ ! -f "$required_file" ]; then
+			printf 'Required OTA rootfs input is missing: %s\n' \
+				"$required_file" >&2
+			return 1
+		fi
+	done
+
+	NFS_ROOT="$target_dir" CROSS_COMPILE="$toolchain_prefix" \
+		"$ota_info_dir/build.sh" "variant=${OTA_BUILD_VARIANT:-userdebug}" --build
+	NFS_ROOT="$target_dir" CROSS_COMPILE="$toolchain_prefix" \
+		"$ota_info_dir/build.sh" "variant=${OTA_BUILD_VARIANT:-userdebug}" --install
+	NFS_ROOT="$target_dir" CROSS_COMPILE="$toolchain_prefix" \
+		TARGET_SYSROOT="$target_sysroot" \
+		"$ota_package_dir/build.sh" "variant=${OTA_BUILD_VARIANT:-userdebug}" --build
+	NFS_ROOT="$target_dir" CROSS_COMPILE="$toolchain_prefix" \
+		TARGET_SYSROOT="$target_sysroot" \
+		"$ota_package_dir/build.sh" "variant=${OTA_BUILD_VARIANT:-userdebug}" --install
+	OTA_ROOTFS_DIR="$target_dir" "$ota_client_dir/build.sh"
+
+	install -D -m 0755 "$project_dir/target_root_script/usr/sbin/create_link.sh" \
+		"$target_dir/usr/sbin/create_link.sh"
+	install -D -m 0755 "$project_dir/target_root_script/usr/sbin/ota-test.sh" \
+		"$target_dir/usr/sbin/ota-test.sh"
+	install -D -m 0755 "$project_dir/target_root_script/etc/init.d/S94ota-prepare.sh" \
+		"$target_dir/etc/init.d/S94ota-prepare.sh"
+	install -D -m 0644 "$ota_conf_dir/client.conf" \
+		"$target_dir/etc/ota/client.conf"
+	install -D -m 0644 "$ota_conf_dir/device_identity.conf" \
+		"$target_dir/etc/ota/device_identity.conf"
+	install -D -m 0644 "$ota_conf_dir/keys/ota_public.pem" \
+		"$target_dir/etc/ota/keys/ota_public.pem"
+	printf '%s\n' "$ota_version" > "$target_dir/etc/version"
+}
+
 mkdir -p "$target_dir/etc/network" "$target_dir/etc/init.d" \
 	"$target_dir/mnt/" "$target_dir/userdata"
 
@@ -100,3 +152,7 @@ esac
 EOF
 
 chmod 0755 "$target_dir/etc/init.d/S41nfs-root"
+
+if [ "${AMP_ROOTFS_INCLUDE_OTA:-1}" = 1 ]; then
+	install_ota_runtime
+fi

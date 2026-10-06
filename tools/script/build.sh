@@ -8,8 +8,8 @@ nfs_root=${NFS_ROOT:-$repo_dir/nfs_rootfs}
 default_private_key=${OTA_PRIVATE_KEY:-$repo_dir/keys/ota_private.pem}
 default_output_dir=${OTA_OUTPUT_DIR:-$nfs_root/ota_package}
 installed_public_key=${OTA_PUBLIC_KEY_INSTALL_PATH:-$nfs_root/etc/ota/keys/ota_public.pem}
-controlled_public_key=${OTA_PUBLIC_KEY_SOURCE_PATH:-$repo_dir/conf/ota/keys/ota_public.pem}
-sys_version_file=${OTA_SYS_VERSION_FILE:-$repo_dir/conf/ota/sys-version}
+controlled_public_key=${OTA_PUBLIC_KEY_SOURCE_PATH:-$repo_dir/target_root_script/etc/ota/keys/ota_public.pem}
+sys_version_file=${OTA_SYS_VERSION_FILE:-$repo_dir/target_root_script/etc/ota/sys-version}
 
 # shellcheck source=tools/script/ota_release.sh
 . "$script_dir/ota_release.sh"
@@ -25,8 +25,8 @@ Commands:
 
 Defaults:
   private key: keys/ota_private.pem
-  public key:  conf/ota/keys/ota_public.pem
-  sys version: conf/ota/sys-version
+  public key:  target_root_script/etc/ota/keys/ota_public.pem
+  sys version: target_root_script/etc/ota/sys-version
   package:     nfs_rootfs/ota_package
 
 Run keygen before building the rootfs. The package command never changes keys
