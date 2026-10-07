@@ -15,7 +15,7 @@
 #include <linux/atomic.h>
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
-#include <quard_mbox_router.h>
+#include <linux/quard_mbox_router.h>
 
 #define REMOTE_CONSOLE_PAYLOAD_SIZE \
 	(sizeof(((struct quard_consumer_msg *)0)->params))

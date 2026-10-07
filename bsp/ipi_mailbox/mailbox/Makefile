@@ -6,7 +6,7 @@ KBUILD_OUTPUT ?= $(PROJECT_ROOT)/work/linux
 ccflags-y += -std=gnu99
 ccflags-y += -I$(KERN_DIR)/drivers/mailbox
 
-obj-m += starfive_ipi_mailbox.o
+obj-m += quard_ipi_mailbox.o
 obj-m += starfive_ipi_mailbox-test.o
 
 .PHONY: all modules clean

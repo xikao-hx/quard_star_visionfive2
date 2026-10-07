@@ -16,7 +16,7 @@
 #include <linux/io.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/of_address.h>
-#include "quard_mbox_router.h"
+#include <linux/quard_mbox_router.h>
 #include <quard_nor_agent_protocol.h>
 #include <quard_nor_layout.h>
 

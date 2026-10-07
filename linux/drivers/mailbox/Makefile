@@ -64,6 +64,9 @@ obj-$(CONFIG_QCOM_IPCC)		+= qcom-ipcc.o
 obj-$(CONFIG_APPLE_MAILBOX)	+= apple-mailbox.o
 
 obj-$(CONFIG_STARFIVE_IPI_MBOX) += starfive_ipi_mailbox.o
+obj-$(CONFIG_QUARD_IPI_MBOX) += quard_ipi_mailbox.o
+obj-$(CONFIG_QUARD_MBOX_ROUTER) += quard_mbox_router.o
+CFLAGS_quard_mbox_router.o := -I$(srctree)/../common_inc/bsp
 
 obj-$(CONFIG_STARFIVE_MBOX)    += starfive_mailbox.o
 

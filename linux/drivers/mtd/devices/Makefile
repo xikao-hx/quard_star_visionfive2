@@ -18,6 +18,8 @@ obj-$(CONFIG_MTD_SST25L)	+= sst25l.o
 obj-$(CONFIG_MTD_BCM47XXSFLASH)	+= bcm47xxsflash.o
 obj-$(CONFIG_MTD_ST_SPI_FSM)    += st_spi_fsm.o
 obj-$(CONFIG_MTD_POWERNV_FLASH)	+= powernv_flash.o
+obj-$(CONFIG_MTD_QUARD_NOR_CLIENT) += quard_nor_client.o
+CFLAGS_quard_nor_client.o := -I$(srctree)/../common_inc/bsp
 
 
 CFLAGS_docg3.o			+= -I$(src)

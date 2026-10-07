@@ -301,6 +301,22 @@ config STARFIVE_IPI_MBOX
 	help
 	  Say Y here if you want to build a AMP IPI Mailbox controller driver.
 
+config QUARD_IPI_MBOX
+	tristate "Quard AMP IPI Mailbox"
+	depends on OF
+	help
+	  Say Y here if you want to build the Quard AMP IPI mailbox
+	  controller driver used by the Linux to FreeRTOS mailbox router.
+
+config QUARD_MBOX_ROUTER
+	tristate "Quard mailbox router"
+	depends on OF
+	depends on QUARD_IPI_MBOX
+	help
+	  Say Y here to route Quard service messages over the StarFive AMP
+	  IPI mailbox. The router is used by clients such as the mailbox-backed
+	  NOR flash driver.
+
 config STARFIVE_MBOX
 	tristate "Platform Starfive Mailbox"
 	depends on OF

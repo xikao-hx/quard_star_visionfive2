@@ -17,7 +17,7 @@ modules:
 clean:
 	$(MAKE) -C $(KERN_DIR) O=$(KBUILD_OUTPUT) M=$(CURRENT_DIR) clean
 
-obj-m   += quard_mbox_router.o
+# obj-m   += quard_mbox_router.o
+# obj-m   += quard_nor_client.o
 obj-m   += quard_remote_console.o
 obj-m   += quard_log.o
-obj-m   += quard_nor_client.o

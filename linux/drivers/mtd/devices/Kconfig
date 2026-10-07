@@ -183,6 +183,14 @@ config MTD_POWERNV_FLASH
 	  platforms from Linux. This device abstracts away the
 	  firmware interface for flash access.
 
+config MTD_QUARD_NOR_CLIENT
+	tristate "Quard mailbox-backed NOR flash client"
+	depends on OF
+	depends on QUARD_MBOX_ROUTER
+	help
+	  This provides an MTD device for the Quard NOR service exposed by
+	  FreeRTOS through the Quard mailbox router.
+
 comment "Disk-On-Chip Device Drivers"
 
 config MTD_DOCG3
