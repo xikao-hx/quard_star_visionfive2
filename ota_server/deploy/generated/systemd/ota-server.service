@@ -1,0 +1,16 @@
+[Unit]
+Description=OTA Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/xikao/quard_star_tutorial
+Environment=OTA_SERVER_CONFIG=/home/xikao/quard_star_tutorial/ota_server/config/ota_server.conf
+ExecStart=/usr/bin/python3 -m ota_server.app.main
+Restart=always
+RestartSec=2
+StandardOutput=append:/home/xikao/quard_star_tutorial/ota_server/logs/ota-server.log
+StandardError=append:/home/xikao/quard_star_tutorial/ota_server/logs/ota-server-error.log
+
+[Install]
+WantedBy=multi-user.target

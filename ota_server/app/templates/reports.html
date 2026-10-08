@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <div class="card-head">
+        <h2>筛选</h2>
+    </div>
+    <form method="get" action="/admin/reports" class="filter-form">
+        <label>
+            <span>Release</span>
+            <select name="release_id">
+                <option value="">全部 Release</option>
+                {% for release_id in filter_options.release_ids %}
+                <option value="{{ release_id }}" {% if filters.release_id == release_id %}selected{% endif %}>{{ release_id }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            <span>设备</span>
+            <select name="device_id">
+                <option value="">全部设备</option>
+                {% for device_id in filter_options.device_ids %}
+                <option value="{{ device_id }}" {% if filters.device_id == device_id %}selected{% endif %}>{{ device_id }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            <span>结果</span>
+            <select name="result">
+                <option value="">全部结果</option>
+                {% for item in filter_options.results %}
+                <option value="{{ item }}" {% if filters.result == item %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="filter-actions">
+            <button type="submit">筛选</button>
+            <a href="/admin/reports">清空</a>
+        </div>
+    </form>
+</section>
+
+<section class="report-list">
+    {% for session in report_sessions %}
+    <article class="card report-session">
+        <div class="card-head">
+            <div>
+                <h2>{{ session.release_id }}</h2>
+                <p class="muted">{{ session.device_id }} · {{ session.source_version }} -> {{ session.target_version }}</p>
+            </div>
+            <span class="badge {{ session.status }}">{{ session.status }}</span>
+        </div>
+        <div class="session-meta">
+            <span>会话：{{ session.session_id }}</span>
+            <span>开始：{{ session.started_at }}</span>
+            <span>最近：{{ session.updated_at }}</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>阶段</th><th>结果</th><th>原因</th><th>时间</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for report in session.events %}
+                <tr>
+                    <td>{{ report.stage }}</td>
+                    <td><span class="badge {{ report.result }}">{{ report.result }}</span></td>
+                    <td>{{ report.reason_code or report.reason_message or '-' }}</td>
+                    <td>{{ report.reported_at }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </article>
+    {% else %}
+    <article class="card">
+        <div class="empty">当前没有升级记录</div>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="card">
+    <div class="card-head">
+        <h2>原始事件</h2>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>设备 ID</th><th>Release</th><th>会话</th><th>阶段</th><th>结果</th><th>原因</th><th>时间</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for report in reports %}
+            <tr>
+                <td>{{ report.device_id }}</td>
+                <td>{{ report.release_id }}</td>
+                <td>{{ report.session_id }}</td>
+                <td>{{ report.stage }}</td>
+                <td><span class="badge {{ report.result }}">{{ report.result }}</span></td>
+                <td>{{ report.reason_code or '-' }}</td>
+                <td>{{ report.reported_at }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="7" class="empty">当前没有升级记录</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="stats">
+    <article class="card stat">
+        <span>设备数</span>
+        <strong>{{ dashboard.device_count }}</strong>
+    </article>
+    <article class="card stat">
+        <span>发布包数</span>
+        <strong>{{ dashboard.release_count }}</strong>
+    </article>
+    <article class="card stat">
+        <span>上报事件数</span>
+        <strong>{{ dashboard.report_count }}</strong>
+    </article>
+</section>
+
+<section class="grid-two">
+    <article class="card">
+        <div class="card-head">
+            <h2>最近设备</h2>
+            <a href="/admin/devices">查看全部</a>
+        </div>
+        <table>
+            <thead>
+                <tr><th>设备 ID</th><th>板型</th><th>当前版本</th><th>最近上线</th></tr>
+            </thead>
+            <tbody>
+            {% for device in dashboard.recent_devices %}
+                <tr>
+                    <td>{{ device.device_id }}</td>
+                    <td>{{ device.board_type }}</td>
+                    <td>{{ device.current_version }}</td>
+                    <td>{{ device.last_seen_at }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="4" class="empty">还没有设备登记</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </article>
+
+    <article class="card">
+        <div class="card-head">
+            <h2>最近发布</h2>
+            <a href="/admin/releases">去发布页</a>
+        </div>
+        <table>
+            <thead>
+                <tr><th>Release</th><th>版本</th><th>下载</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+            {% for release in dashboard.recent_releases %}
+                <tr>
+                    <td>{{ release.release_id }}</td>
+                    <td>{{ release.sys_version }}</td>
+                    <td><a href="{{ release.package_url }}">下载包</a></td>
+                    <td>
+                        <form method="post" action="/admin/releases/{{ release.release_id }}/delete" class="inline-form" onsubmit="return confirm('确认删除 {{ release.release_id }}？相关升级记录和包文件也会删除。');">
+                            <button type="submit" class="danger-button">删除</button>
+                        </form>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="4" class="empty">还没有发布包</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </article>
+</section>
+
+<section class="card">
+    <div class="card-head">
+        <h2>最近升级记录</h2>
+        <a href="/admin/reports">查看全部</a>
+    </div>
+    <table>
+        <thead>
+            <tr><th>设备 ID</th><th>Release</th><th>阶段</th><th>结果</th><th>上报时间</th></tr>
+        </thead>
+        <tbody>
+        {% for report in dashboard.recent_reports %}
+            <tr>
+                <td>{{ report.device_id }}</td>
+                <td>{{ report.release_id }}</td>
+                <td>{{ report.stage }}</td>
+                <td><span class="badge {{ report.result }}">{{ report.result }}</span></td>
+                <td>{{ report.reported_at }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5" class="empty">还没有升级记录</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

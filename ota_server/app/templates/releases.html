@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid-two">
+    <article class="card">
+        <div class="card-head">
+            <h2>发布新 OTA 包</h2>
+        </div>
+        <form method="post" action="/admin/releases/publish" enctype="multipart/form-data" class="form">
+            <label>
+                <span>Release ID</span>
+                <input type="text" name="release_id" placeholder="20260601-quard-star-r1" required>
+            </label>
+            <label>
+                <span>板型</span>
+                <input type="text" name="board_type" placeholder="quard-star" required>
+            </label>
+            <label>
+                <span>版本说明</span>
+                <textarea name="release_note" rows="4" placeholder="例如：修复启动问题"></textarea>
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="mandatory" value="1">
+                <span>强制升级</span>
+            </label>
+            <label>
+                <span>上传 OTA 压缩包</span>
+                <input type="file" name="package_file" accept=".tar.gz,.tgz" required>
+            </label>
+            <button type="submit">发布 OTA 包</button>
+        </form>
+        <div class="tip">
+            上传要求：压缩包内部顶层目录必须是 <code>ota_package/</code>，且包含 <code>data.json</code>、<code>manifest.hash</code>、<code>signature.sig</code> 和所有镜像文件。
+        </div>
+    </article>
+
+    <article class="card">
+        <div class="card-head">
+            <h2>你现在能做什么</h2>
+        </div>
+        <ul class="help-list">
+            <li>直接在浏览器上传 OTA 压缩包，不用再手敲发布命令。</li>
+            <li>发布后服务器会自动校验包内容、生成下载文件、写入数据库。</li>
+            <li>后续宿主机代理只需要调用 `check` 接口就能拿到下载地址。</li>
+        </ul>
+    </article>
+</section>
+
+<section class="card">
+    <div class="card-head">
+        <h2>已发布 OTA 包</h2>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Release</th><th>板型</th><th>版本</th><th>下载</th><th>状态</th><th>时间</th><th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for release in releases %}
+            <tr>
+                <td>{{ release.release_id }}</td>
+                <td>{{ release.board_type }}</td>
+                <td>{{ release.sys_version }}</td>
+                <td><a href="{{ release.package_url }}">下载压缩包</a></td>
+                <td>
+                    {% if release.archive_exists %}
+                    <span class="badge success">ready</span>
+                    {% else %}
+                    <span class="badge failed">missing</span>
+                    {% endif %}
+                </td>
+                <td>{{ release.created_at }}</td>
+                <td>
+                    <form method="post" action="/admin/releases/{{ release.release_id }}/delete" class="inline-form" onsubmit="return confirm('确认删除 {{ release.release_id }}？相关升级记录和包文件也会删除。');">
+                        <button type="submit" class="danger-button">删除</button>
+                    </form>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="7" class="empty">还没有发布包</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

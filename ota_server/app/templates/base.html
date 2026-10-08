@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} - OTA 管理台</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+    <div class="shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-mark">OTA</div>
+                <div>
+                    <div class="brand-title">远程升级管理台</div>
+                    <div class="brand-subtitle">Quard Star Tutorial</div>
+                </div>
+            </div>
+            <nav class="nav">
+                <a href="/admin" class="{% if nav == 'dashboard' %}active{% endif %}">概览</a>
+                <a href="/admin/releases" class="{% if nav == 'releases' %}active{% endif %}">发布管理</a>
+                <a href="/admin/devices" class="{% if nav == 'devices' %}active{% endif %}">设备列表</a>
+                <a href="/admin/reports" class="{% if nav == 'reports' %}active{% endif %}">升级记录</a>
+            </nav>
+            <div class="sidebar-foot">
+                <div>API 基址</div>
+                <code>{{ public_base_url }}/api/v1</code>
+            </div>
+        </aside>
+        <main class="main">
+            <header class="page-head">
+                <div>
+                    <h1>{{ title }}</h1>
+                    {% if subtitle %}
+                    <p>{{ subtitle }}</p>
+                    {% endif %}
+                </div>
+            </header>
+            {% if message %}
+            <div class="flash {{ message_type or 'info' }}">{{ message }}</div>
+            {% endif %}
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</body>
+</html>
