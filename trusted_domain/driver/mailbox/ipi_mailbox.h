@@ -76,7 +76,7 @@ enum mbox_type {
 	SOC_MAX_MBOX,
 };
 
-void quard_mailbox_ipi_controller_init(enum mbox_type type);
+void quard_mbox_ipi_controller_init(enum mbox_type type);
 struct mbox_chan *mbox_request_channel(enum mbox_type type, struct mbox_client *client);
 int mbox_send_message(struct mbox_chan *chan, void *mssg);
 

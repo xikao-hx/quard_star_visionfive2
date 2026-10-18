@@ -22,7 +22,9 @@ void riscv_set_ipi_amp_enable(void);
 int riscv_get_ipi_amp_enable(void);
 void ipi_set_extra_bits(unsigned long (*func)(void));
 unsigned long riscv_clear_amp_bits(void);
-void register_ipi_mailbox_handler(void (*handler)(unsigned long));
+int register_ipi_mailbox_handler(void (*handler)(unsigned long, void *),
+				 void *data);
+void unregister_ipi_mailbox_handler(void *data);
 #endif
 
 #endif /* _ASM_RISCV_IRQ_H */

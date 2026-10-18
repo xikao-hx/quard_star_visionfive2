@@ -12,5 +12,6 @@ obj-$(CONFIG_K3_SEC_PROXY) += k3-sec-proxy.o
 obj-$(CONFIG_ZYNQMP_IPI) += zynqmp-ipi.o
 ifeq ($(CONFIG_SPL_BUILD),)
 obj-$(CONFIG_QUARD_IPI_MAILBOX) += quard_ipi_mailbox.o
+CFLAGS_quard_ipi_mailbox.o += -I$(srctree)/../common_inc/bsp
 obj-$(CONFIG_QUARD_MBOX_ROUTER) += quard_mbox_router.o
 endif

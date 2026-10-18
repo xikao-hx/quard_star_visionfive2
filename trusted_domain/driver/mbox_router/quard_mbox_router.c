@@ -148,13 +148,6 @@ static void router_rx_notify(struct mbox_client *cl, void *msg_raw)
 		LOG_E("send msg to server queue %d failed", server_id);
 		return;
 	}
-
-	/*
-	 * Do not call portYIELD_FROM_ISR() here.  The RISC-V SSIP trap path
-	 * invokes vTaskSwitchContext() after vPortClearIpiInterrupt() returns.
-	 * Yielding here would schedule twice during one mailbox interrupt and can
-	 * restore an inconsistent task context before the mailbox ACK completes.
-	 */
 }
 
 static void router_tx_empty_notify(struct mbox_client *cl, void *data,
@@ -171,7 +164,7 @@ static void init_quard_mbox(struct quard_mbox_router *router)
 	struct mbox_client rx_cl = { 0 };
 	const struct router_cfg *cfg = &router->cfg;
 
-	quard_mailbox_ipi_controller_init((enum mbox_type)cfg->mbox_type);
+	quard_mbox_ipi_controller_init((enum mbox_type)cfg->mbox_type);
 
 	tx_cl.dir = SEND_TYPE;
 	tx_cl.idx = cfg->tx_mbox_id;

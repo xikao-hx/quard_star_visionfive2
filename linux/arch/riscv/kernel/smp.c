@@ -12,9 +12,11 @@
 #include <linux/clockchips.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/kexec.h>
 #include <linux/percpu.h>
 #include <linux/profile.h>
+#include <linux/rcupdate.h>
 #include <linux/smp.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
@@ -50,19 +52,61 @@ static int ipi_virq_base __ro_after_init;
 static int nr_ipi __ro_after_init = IPI_MAX;
 static struct irq_desc *ipi_desc[IPI_MAX] __read_mostly;
 #ifdef CONFIG_RISCV_AMP
+typedef void (*ipi_mailbox_handler_t)(unsigned long msg_type, void *data);
+
 static struct irq_desc *amp_desc;
-static void (*ipi_mailbox_handler)(unsigned long msg_type);
+static DEFINE_MUTEX(ipi_mailbox_handler_lock);
+static ipi_mailbox_handler_t __rcu ipi_mailbox_handler;
+static void *ipi_mailbox_handler_data;
+
 void ipi_amp_handle(unsigned long msg_type)
 {
-	if (ipi_mailbox_handler)
-		ipi_mailbox_handler(msg_type);
+	ipi_mailbox_handler_t handler;
+
+	rcu_read_lock();
+	handler = rcu_dereference(ipi_mailbox_handler);
+	if (handler)
+		handler(msg_type, READ_ONCE(ipi_mailbox_handler_data));
+	rcu_read_unlock();
 }
 
-void register_ipi_mailbox_handler(void (*handler)(unsigned long))
+int register_ipi_mailbox_handler(void (*handler)(unsigned long, void *),
+				 void *data)
 {
-	ipi_mailbox_handler = handler;
+	int ret = 0;
+
+	if (!handler || !data)
+		return -EINVAL;
+
+	mutex_lock(&ipi_mailbox_handler_lock);
+	if (rcu_access_pointer(ipi_mailbox_handler)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	WRITE_ONCE(ipi_mailbox_handler_data, data);
+	rcu_assign_pointer(ipi_mailbox_handler, handler);
+
+out_unlock:
+	mutex_unlock(&ipi_mailbox_handler_lock);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(register_ipi_mailbox_handler);
+
+void unregister_ipi_mailbox_handler(void *data)
+{
+	mutex_lock(&ipi_mailbox_handler_lock);
+	if (WARN_ON(READ_ONCE(ipi_mailbox_handler_data) != data))
+		goto out_unlock;
+
+	rcu_assign_pointer(ipi_mailbox_handler, NULL);
+	synchronize_rcu();
+	WRITE_ONCE(ipi_mailbox_handler_data, NULL);
+
+out_unlock:
+	mutex_unlock(&ipi_mailbox_handler_lock);
+}
+EXPORT_SYMBOL_GPL(unregister_ipi_mailbox_handler);
 #endif
 
 int riscv_hartid_to_cpuid(unsigned long hartid)

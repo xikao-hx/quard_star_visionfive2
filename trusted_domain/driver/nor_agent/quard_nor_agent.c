@@ -48,7 +48,7 @@ static uint32_t sum_32(const void *buffer, uint32_t length)
 	return sum;
 }
 
-static bool master_range_valid(uint32_t offset, uint32_t length)
+static bool nor_flash_range_valid(uint32_t offset, uint32_t length)
 {
 	return length != 0U && offset < QUARD_NOR_FLASH_SIZE &&
 	       length <= QUARD_NOR_FLASH_SIZE - offset;
@@ -67,7 +67,7 @@ static int spi_nor_gpt_read(void *context, uint32_t offset, void *buffer,
 	return spi_nor_read_data(offset, buffer, length);
 }
 
-static int refresh_flash_info(void)
+static int get_flash_info(void)
 {
 	struct quard_nor_info *info = &nor_agent.info;
 	int ret;
@@ -93,7 +93,7 @@ failed:
 	return ret;
 }
 
-static bool destructive_range_valid(uint32_t offset, uint32_t length)
+static bool nor_write_erase_range_valid(uint32_t offset, uint32_t length)
 {
 	uint32_t i;
 
@@ -102,7 +102,7 @@ static bool destructive_range_valid(uint32_t offset, uint32_t length)
 	    offset - QUARD_NOR_RESERVED_OFFSET <=
 		QUARD_NOR_RESERVED_SIZE - length)
 		return true;
-	if (!nor_agent.info_valid && refresh_flash_info() != 0)
+	if (!nor_agent.info_valid && get_flash_info() != 0)
 		return false;
 	for (i = 0; i < nor_agent.info.nparts; i++) {
 		const nor_part_t *part = &nor_agent.info.parts[i];
@@ -149,7 +149,7 @@ static void nor_agent_recv_cb(struct quard_consumer_msg *msg)
 		if (!shared_buffer_valid(address, sizeof(nor_agent.info)) ||
 		    length != sizeof(nor_agent.info))
 			break;
-		ret = refresh_flash_info();
+		ret = get_flash_info();
 		if (ret != 0)
 			break;
 		memcpy(buffer, &nor_agent.info, sizeof(nor_agent.info));
@@ -157,7 +157,7 @@ static void nor_agent_recv_cb(struct quard_consumer_msg *msg)
 		reply->check_sum = sum_32(buffer, sizeof(nor_agent.info));
 		break;
 	case NOR_READ:
-		if (!master_range_valid(offset, length) ||
+		if (!nor_flash_range_valid(offset, length) ||
 		    !shared_buffer_valid(address, length))
 			break;
 		ret = spi_nor_read_data(offset, buffer, length);
@@ -167,9 +167,9 @@ static void nor_agent_recv_cb(struct quard_consumer_msg *msg)
 		}
 		break;
 	case NOR_WRITE:
-		if (!master_range_valid(offset, length) ||
+		if (!nor_flash_range_valid(offset, length) ||
 		    !shared_buffer_valid(address, length) ||
-		    !destructive_range_valid(offset, length))
+		    !nor_write_erase_range_valid(offset, length))
 			break;
 		shared_memory_barrier();
 		checksum = sum_32(buffer, length);
@@ -180,10 +180,10 @@ static void nor_agent_recv_cb(struct quard_consumer_msg *msg)
 		ret = spi_nor_write_data(offset, buffer, length);
 		break;
 	case NOR_ERASE:
-		if (!master_range_valid(offset, length) ||
+		if (!nor_flash_range_valid(offset, length) ||
 		    (offset % QUARD_NOR_ERASE_SIZE) != 0U ||
 		    (length % QUARD_NOR_ERASE_SIZE) != 0U ||
-		    !destructive_range_valid(offset, length))
+		    !nor_write_erase_range_valid(offset, length))
 			break;
 		ret = spi_nor_erase_sector(offset, length);
 		break;

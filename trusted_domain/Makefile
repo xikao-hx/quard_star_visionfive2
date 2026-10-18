@@ -138,6 +138,7 @@ C_INCLUDES = \
 C_INCLUDES += $(addprefix -I ,$(DRIVER_INC))
 C_INCLUDES += $(addprefix -I ,$(APP_INC))
 C_INCLUDES += -I $(TOP_DIR)/board
+C_INCLUDES += -I $(TOP_DIR)/../common_inc/bsp
 
 # compile gcc flags
 ASFLAGS = $(MCU) $(AS_DEFS) $(AS_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections

@@ -5,431 +5,278 @@
 
 #include <asm/irq.h>
 #include <asm/sbi.h>
-#include <linux/clk.h>
-#include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
-#include <linux/jiffies.h>
 #include <linux/kernel.h>
-#include <linux/bitfield.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
-#include <linux/suspend.h>
 #include <linux/slab.h>
-#include <linux/atomic.h>
-#include <linux/ratelimit.h>
-#include <linux/workqueue.h>
+#include <linux/spinlock.h>
 
-#include "mailbox.h"
+#include "quard_ipi_mailbox_protocol.h"
 
-#define IPI_MB_CHANS		2
-#define IPI_MB_PAYLOAD_SIZE	28
-#define IPI_MB_STATE_OFFSET	28
-#define IPI_MB_CHAN_STRIDE	32
+#define IPI_MBOX_EVENT_MASK	(BIT(IPI_MBOX_TYPE_RX) | \
+				 BIT(IPI_MBOX_TYPE_TX))
 
-#define IPI_MB_STATE_IDLE	0
-#define IPI_MB_STATE_DATA_READY	1
-#define IPI_MB_STATE_ACK	2
-#define IPI_MB_RECOVERY_MS	20
+struct quard_ipi_mbox;
 
-/* Please not change TX & RX */
-enum ipi_mb_chan_type {
-	IPI_MB_TYPE_RX		= 0, /* FreeRTOS TX -> Linux RX */
-	IPI_MB_TYPE_TX		= 1, /* Linux TX -> FreeRTOS RX */
+struct quard_ipi_mbox_chan {
+	struct quard_ipi_mbox	*ipi_mbox;
+	unsigned int		type;
+	uint8_t			*data;
+	uint32_t		*state;
+	uint32_t		rtos_hart_id;
 };
 
-struct ipi_mb_priv;
-
-struct ipi_mb_con_priv {
-	struct ipi_mb_priv	*priv;
-	unsigned int		idx;
-	enum ipi_mb_chan_type	type;
-	bool			configured;
-	struct mbox_chan	*chan;
-	void			*data;
-	void			*ack;
-	int rtos_hart_id;
-};
-
-struct ipi_mb_priv {
+struct quard_ipi_mbox {
 	struct device		*dev;
-
 	struct mbox_controller	mbox;
-	struct mbox_chan	chans[IPI_MB_CHANS];
-	struct ipi_mb_con_priv  con_priv[IPI_MB_CHANS];
+	struct mbox_chan	chans[IPI_MBOX_CHANS];
+	struct quard_ipi_mbox_chan mb[IPI_MBOX_CHANS];
 
-	void *mbase;
-	int mem_size;
-	atomic64_t tx_submit;
-	atomic64_t tx_busy;
-	atomic64_t tx_ipi_error;
-	atomic64_t tx_ack;
-	atomic64_t tx_stale_ack;
-	atomic64_t recovery_kicks;
-	struct delayed_work recovery_work;
-	spinlock_t rx_lock;
-	bool rx_delivering;
+	void *base;
+	spinlock_t tx_lock;
 };
 
-struct ipi_mb_priv *mb_priv;
-
-static void *ipi_mb_channel(void *base, unsigned int idx)
+static uint8_t *ipi_mbox_base_addr(void *base, unsigned int idx)
 {
-	return base + idx * IPI_MB_CHAN_STRIDE;
+	return (uint8_t *)base + idx * IPI_MBOX_CHAN_STRIDE;
 }
 
-static u32 ipi_mb_state(void *ack)
+static uint32_t ipi_mbox_get_state(uint32_t *state)
 {
-	u32 state = READ_ONCE(*(u32 *)ack);
-
-	smp_rmb();
-	return state;
+	/* Read the state before consuming payload written by the remote hart. */
+	return smp_load_acquire(state);
 }
 
-static void ipi_mb_set_state(void *ack, u32 state)
+static void ipi_mbox_set_state(uint32_t *state, uint32_t value)
 {
-	smp_wmb();
-	WRITE_ONCE(*(u32 *)ack, state);
-	smp_wmb();
+	/* Publish payload updates before making the new state visible. */
+	smp_store_release(state, value);
 }
 
-static void ipi_mb_recovery_kick(struct ipi_mb_priv *priv,
-				 struct ipi_mb_con_priv *cp,
-				 unsigned int ipi_type)
+static void ipi_mbox_process_rx(struct quard_ipi_mbox *ipi_mbox)
 {
-	long long kicks = atomic64_inc_return(&priv->recovery_kicks);
-	int ret;
+	struct quard_ipi_mbox_chan *rx = &ipi_mbox->mb[IPI_MBOX_TYPE_RX];
+	struct mbox_chan *chan = &ipi_mbox->chans[IPI_MBOX_TYPE_RX];
+	uint8_t message[IPI_MBOX_PAYLOAD_SIZE];
 
-	ret = sbi_send_ipi_amp(cp->rtos_hart_id, ipi_type);
-	if (ret) {
-		dev_err_ratelimited(priv->dev,
-			"ipi recovery kick failed: type=%u state=%u ret=%d kicks=%lld\n",
-			ipi_type, ipi_mb_state(cp->ack), ret, kicks);
+	if (!READ_ONCE(chan->cl) ||
+	    ipi_mbox_get_state(rx->state) != IPI_MBOX_STATE_DATA_READY)
+		return;
+
+	memcpy(message, rx->data, sizeof(message));
+	memset(rx->data, 0, sizeof(message));
+
+	mbox_chan_received_data(chan, message);
+	ipi_mbox_set_state(rx->state, IPI_MBOX_STATE_ACK);
+	(void)sbi_send_ipi_amp(rx->rtos_hart_id, IPI_MBOX_TYPE_RX);
+}
+
+static void ipi_mbox_process_tx_done(struct quard_ipi_mbox *ipi_mbox)
+{
+	struct quard_ipi_mbox_chan *tx = &ipi_mbox->mb[IPI_MBOX_TYPE_TX];
+	struct mbox_chan *chan = &ipi_mbox->chans[IPI_MBOX_TYPE_TX];
+	unsigned long flags;
+	bool completed = false;
+
+	spin_lock_irqsave(&ipi_mbox->tx_lock, flags);
+	if (READ_ONCE(chan->cl) &&
+	    ipi_mbox_get_state(tx->state) == IPI_MBOX_STATE_ACK) {
+		ipi_mbox_set_state(tx->state, IPI_MBOX_STATE_IDLE);
+		completed = true;
 	}
+	spin_unlock_irqrestore(&ipi_mbox->tx_lock, flags);
+
+	if (completed)
+		mbox_chan_txdone(chan, 0);
 }
 
-static int ipi_mb_generic_tx(struct ipi_mb_priv *priv,
-				     struct ipi_mb_con_priv *cp,
-				     void *data)
+static void ipi_mbox_isr(unsigned long msg_type, void *data)
 {
-	u32 state;
+	struct quard_ipi_mbox *ipi_mbox = data;
+
+	msg_type &= IPI_MBOX_EVENT_MASK;
+	if (msg_type & BIT(IPI_MBOX_TYPE_RX))
+		ipi_mbox_process_rx(ipi_mbox);
+	if (msg_type & BIT(IPI_MBOX_TYPE_TX))
+		ipi_mbox_process_tx_done(ipi_mbox);
+}
+
+static int ipi_mbox_send_data(struct mbox_chan *chan, void *data)
+{
+	struct quard_ipi_mbox_chan *mb = chan->con_priv;
+	struct quard_ipi_mbox *ipi_mbox;
+	unsigned long flags;
+	uint32_t state;
 	int ret;
 
-	if (cp->type != IPI_MB_TYPE_TX)
+	if (!mb || !mb->ipi_mbox)
+		return -ENODEV;
+	if (!data)
+		return -EINVAL;
+	ipi_mbox = mb->ipi_mbox;
+
+	if (mb->type != IPI_MBOX_TYPE_TX)
 		return -EINVAL;
 
-	atomic64_inc(&priv->tx_submit);
-	state = ipi_mb_state(cp->ack);
+	spin_lock_irqsave(&ipi_mbox->tx_lock, flags);
+	state = ipi_mbox_get_state(mb->state);
 	/* A timed-out request may have been consumed after the mailbox core
 	 * dropped it.  A new send is only submitted when no request is active,
 	 * so an ACK observed here is stale and can safely be retired.
 	 */
-	if (state == IPI_MB_STATE_ACK) {
-		ipi_mb_set_state(cp->ack, IPI_MB_STATE_IDLE);
-		atomic64_inc(&priv->tx_stale_ack);
-		dev_warn_ratelimited(priv->dev,
-			"ipi recovered stale TX ACK: idx=%u count=%lld\n",
-			cp->idx, atomic64_read(&priv->tx_stale_ack));
-		state = IPI_MB_STATE_IDLE;
+	if (state == IPI_MBOX_STATE_ACK) {
+		ipi_mbox_set_state(mb->state, IPI_MBOX_STATE_IDLE);
+		state = IPI_MBOX_STATE_IDLE;
 	}
-	if (state != IPI_MB_STATE_IDLE) {
-		atomic64_inc(&priv->tx_busy);
-		dev_err_ratelimited(priv->dev,
-			"ipi TX busy: idx=%u state=%u submit=%lld busy=%lld ack=%lld\n",
-			cp->idx, state, atomic64_read(&priv->tx_submit),
-			atomic64_read(&priv->tx_busy),
-			atomic64_read(&priv->tx_ack));
+	if (state != IPI_MBOX_STATE_IDLE) {
+		spin_unlock_irqrestore(&ipi_mbox->tx_lock, flags);
 		return -EBUSY;
 	}
 
-	memcpy(cp->data, data, IPI_MB_PAYLOAD_SIZE);
-	ipi_mb_set_state(cp->ack, IPI_MB_STATE_DATA_READY);
-	ret = sbi_send_ipi_amp(cp->rtos_hart_id, IPI_MB_TYPE_TX);
+	memcpy(mb->data, data, IPI_MBOX_PAYLOAD_SIZE);
+	ipi_mbox_set_state(mb->state, IPI_MBOX_STATE_DATA_READY);
+	spin_unlock_irqrestore(&ipi_mbox->tx_lock, flags);
+
+	ret = sbi_send_ipi_amp(mb->rtos_hart_id, IPI_MBOX_TYPE_TX);
 	if (ret) {
-		atomic64_inc(&priv->tx_ipi_error);
-		if (ipi_mb_state(cp->ack) == IPI_MB_STATE_DATA_READY)
-			ipi_mb_set_state(cp->ack, IPI_MB_STATE_IDLE);
-		dev_err_ratelimited(priv->dev,
-			"ipi TX IPI failed: idx=%u state=%u ret=%d errors=%lld\n",
-			cp->idx, ipi_mb_state(cp->ack), ret,
-			atomic64_read(&priv->tx_ipi_error));
+		spin_lock_irqsave(&ipi_mbox->tx_lock, flags);
+		if (ipi_mbox_get_state(mb->state) == IPI_MBOX_STATE_DATA_READY)
+			ipi_mbox_set_state(mb->state, IPI_MBOX_STATE_IDLE);
+		spin_unlock_irqrestore(&ipi_mbox->tx_lock, flags);
 	}
 	return ret;
 }
 
-static void ipi_mb_process_rx(void)
+static int ipi_mbox_startup(struct mbox_chan *chan)
 {
-	unsigned int i;
+	struct quard_ipi_mbox_chan *mb = chan->con_priv;
+	struct quard_ipi_mbox *ipi_mbox = mb->ipi_mbox;
 
-	for (i = 0; i < IPI_MB_CHANS; i++) {
-		struct ipi_mb_con_priv *cp = &mb_priv->con_priv[i];
-		u8 message[IPI_MB_PAYLOAD_SIZE];
-		unsigned long flags;
-		bool received = false;
-		u32 state;
-
-		if (!cp->configured || cp->type != IPI_MB_TYPE_RX)
-			continue;
-
-		spin_lock_irqsave(&mb_priv->rx_lock, flags);
-		if (mb_priv->rx_delivering) {
-			spin_unlock_irqrestore(&mb_priv->rx_lock, flags);
-			continue;
-		}
-		state = ipi_mb_state(cp->ack);
-		if (state == IPI_MB_STATE_DATA_READY) {
-			memcpy(message, cp->data, sizeof(message));
-			memset(cp->data, 0, sizeof(message));
-			ipi_mb_set_state(cp->ack, IPI_MB_STATE_ACK);
-			mb_priv->rx_delivering = true;
-			received = true;
-		}
-		spin_unlock_irqrestore(&mb_priv->rx_lock, flags);
-
-		if (received) {
-			mbox_chan_received_data(cp->chan, message);
-			spin_lock_irqsave(&mb_priv->rx_lock, flags);
-			mb_priv->rx_delivering = false;
-			spin_unlock_irqrestore(&mb_priv->rx_lock, flags);
-			sbi_send_ipi_amp(cp->rtos_hart_id,
-					 IPI_MB_TYPE_RX);
-		}
-	}
+	if (mb->type == IPI_MBOX_TYPE_RX)
+		ipi_mbox_process_rx(ipi_mbox);
+	else
+		ipi_mbox_process_tx_done(ipi_mbox);
+	return 0;
 }
 
-static bool ipi_mb_last_tx_done(struct mbox_chan *chan)
-{
-	struct ipi_mb_con_priv *cp = chan->con_priv;
-
-	if (!cp || cp->type != IPI_MB_TYPE_TX)
-		return false;
-	if (ipi_mb_state(cp->ack) != IPI_MB_STATE_ACK)
-		return false;
-
-	ipi_mb_set_state(cp->ack, IPI_MB_STATE_IDLE);
-	atomic64_inc(&cp->priv->tx_ack);
-	return true;
-}
-
-/*
- * AMP IPIs are notifications, while the shared state is authoritative.  If
- * either side coalesces or loses a notification, relying solely on the IPI
- * leaves a channel permanently in DATA_READY/ACK.  Poll the state as a
- * fallback, complete ACKed Linux transmissions, and re-kick notifications
- * whose state is still pending.
- */
-static void ipi_mb_recovery_work(struct work_struct *work)
-{
-	struct ipi_mb_priv *priv = container_of(to_delayed_work(work),
-						struct ipi_mb_priv, recovery_work);
-	struct ipi_mb_con_priv *rx = &priv->con_priv[IPI_MB_TYPE_RX];
-	struct ipi_mb_con_priv *tx = &priv->con_priv[IPI_MB_TYPE_TX];
-	unsigned long flags;
-	bool kick_rx;
-
-	if (READ_ONCE(mb_priv) != priv)
-		return;
-
-	ipi_mb_process_rx();
-
-	if (ipi_mb_state(tx->ack) == IPI_MB_STATE_DATA_READY) {
-		ipi_mb_recovery_kick(priv, tx, IPI_MB_TYPE_TX);
-	}
-	spin_lock_irqsave(&priv->rx_lock, flags);
-	kick_rx = !priv->rx_delivering &&
-		  ipi_mb_state(rx->ack) == IPI_MB_STATE_ACK;
-	spin_unlock_irqrestore(&priv->rx_lock, flags);
-	if (kick_rx) {
-		ipi_mb_recovery_kick(priv, rx, IPI_MB_TYPE_RX);
-	}
-
-	mod_delayed_work(system_wq, &priv->recovery_work,
-			 msecs_to_jiffies(IPI_MB_RECOVERY_MS));
-}
-
-static void ipi_mb_isr(unsigned long msg_type)
-{
-	if (!msg_type || !mb_priv)
-		return;
-
-	if (msg_type & BIT(IPI_MB_TYPE_RX)) {
-		ipi_mb_process_rx();
-	}
-	if (msg_type & BIT(IPI_MB_TYPE_TX)) {
-		/* TX completion is state-polled, so a lost ACK IPI cannot wedge it. */
-	}
-}
-
-static int ipi_mb_send_data(struct mbox_chan *chan, void *data)
-{
-	struct ipi_mb_con_priv *cp = chan->con_priv;
-	struct ipi_mb_priv *priv;
-
-	if (!cp || !cp->priv)
-		return -ENODEV;
-	priv = cp->priv;
-	return ipi_mb_generic_tx(priv, cp, data);
-}
-
-static const struct mbox_chan_ops ipi_mb_ops = {
-	.send_data = ipi_mb_send_data,
-	.last_tx_done = ipi_mb_last_tx_done,
+static const struct mbox_chan_ops ipi_mbox_ops = {
+	.send_data = ipi_mbox_send_data,
+	.startup = ipi_mbox_startup,
 };
 
-static struct mbox_chan *ipi_mb_xlate(struct mbox_controller *mbox,
-				      const struct of_phandle_args *sp)
+static struct mbox_chan *ipi_mbox_xlate(struct mbox_controller *mbox,
+				      const struct of_phandle_args *args)
 {
-	struct ipi_mb_priv *priv = container_of(mbox, struct ipi_mb_priv, mbox);
-	struct ipi_mb_con_priv *cp;
-	struct mbox_chan *p_chan;
-	u32 type, idx;
+	uint32_t type, idx;
 
-	if (sp->args_count != 2) {
-		dev_err(mbox->dev, "Invalid argument count %d\n", sp->args_count);
+	if (args->args_count != 2) {
+		dev_err(mbox->dev, "invalid argument count %d\n", args->args_count);
 		return ERR_PTR(-EINVAL);
 	}
 
-	type = sp->args[0]; /* channel type */
-	idx = sp->args[1]; /* index */
+	type = args->args[0];
+	idx = args->args[1];
 
-	if (type > IPI_MB_TYPE_TX || idx >= mbox->num_chans) {
-		dev_err(mbox->dev,
-			"Not supported channel number: %d. (type: %d, idx: %d)\n",
-			idx, type, idx);
+	if (type > IPI_MBOX_TYPE_TX || idx >= mbox->num_chans || type != idx) {
+		dev_err(mbox->dev, "unsupported mailbox channel: type=%u idx=%u\n", type, idx);
 		return ERR_PTR(-EINVAL);
 	}
 
-	p_chan = &mbox->chans[idx];
-	cp = &priv->con_priv[idx];
-	if (cp->configured && cp->type != type) {
-		dev_err(mbox->dev,
-			"channel %u already configured for type %u\n",
-			idx, cp->type);
-		return ERR_PTR(-EBUSY);
-	}
-	cp->type = type;
-	cp->configured = true;
-
-	return p_chan;
+	return &mbox->chans[idx];
 }
 
-static void ipi_mb_init_generic(struct ipi_mb_priv *priv, int rtos_hart_id)
+static int ipi_mbox_init_mem_region(struct quard_ipi_mbox *ipi_mbox,
+				  struct platform_device *pdev)
 {
+	struct resource *res;
+	resource_size_t mem_size;
 	unsigned int i;
 
-	for (i = 0; i < IPI_MB_CHANS; i++) {
-		struct ipi_mb_con_priv *cp = &priv->con_priv[i];
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
+	if (resource_size(res) < IPI_MBOX_REQUIRED_SIZE)
+		return -EINVAL;
 
-		cp->priv = priv;
-		cp->idx = i;
-		cp->chan = &priv->chans[i];
-		cp->rtos_hart_id = rtos_hart_id;
-		cp->chan->con_priv = cp;
+	mem_size = resource_size(res);
+	ipi_mbox->base = devm_memremap(ipi_mbox->dev, res->start,
+					 mem_size, MEMREMAP_WB);
+
+	if (IS_ERR(ipi_mbox->base))
+		return PTR_ERR(ipi_mbox->base);
+
+	for (i = 0; i < IPI_MBOX_CHANS; i++) {
+		uint8_t *channel = ipi_mbox_base_addr(ipi_mbox->base, i);
+
+		ipi_mbox->mb[i].data = channel;
+		ipi_mbox->mb[i].state = (uint32_t *)(channel + IPI_MBOX_STATE_OFFSET);
 	}
-
-	priv->mbox.num_chans = IPI_MB_CHANS;
-	priv->mbox.of_xlate = ipi_mb_xlate;
-
-}
-
-static int ipi_mb_init_mem_region(struct ipi_mb_priv *priv, struct platform_device *pdev)
-{
-	phys_addr_t phy_addr;
-	struct resource *r;
-	unsigned int i;
-
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-
-	phy_addr = r->start;
-	priv->mem_size = resource_size(r);
-	priv->mbase = devm_memremap(priv->dev, phy_addr,
-				   priv->mem_size,
-				   MEMREMAP_WB);
-
-	if (IS_ERR(priv->mbase)) {
-		dev_err(priv->dev, "unable to map memory region: %llx %d\n",
-			(u64)r->start, priv->mem_size);
-		return -EBUSY;
-	}
-
-	for (i = 0; i < IPI_MB_CHANS; i++) {
-		void *channel = ipi_mb_channel(priv->mbase, i);
-
-		priv->con_priv[i].data = channel;
-		priv->con_priv[i].ack = priv->con_priv[i].data +
-			IPI_MB_STATE_OFFSET;
-	}
-
-	memset(priv->mbase, 0, priv->mem_size);
+	/* FreeRTOS owns initialisation; preserve messages posted before probe. */
 
 	return 0;
 }
 
-static int starfive_ipi_mb_probe(struct platform_device *pdev)
+static int quard_ipi_mbox_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
-	struct ipi_mb_priv *priv;
-	u32 rtos_hart_id;
+	struct quard_ipi_mbox *ipi_mbox;
+	unsigned int i;
+	uint32_t rtos_hart_id;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
+	ipi_mbox = devm_kzalloc(dev, sizeof(*ipi_mbox), GFP_KERNEL);
+	if (!ipi_mbox)
 		return -ENOMEM;
 
-	if (of_property_read_u32(np, "rtos-hart-id",
-				 &rtos_hart_id))
+	if (of_property_read_u32(np, "rtos-hart-id", &rtos_hart_id))
 		return -EINVAL;
 
-	priv->dev = dev;
-	atomic64_set(&priv->tx_submit, 0);
-	atomic64_set(&priv->tx_busy, 0);
-	atomic64_set(&priv->tx_ipi_error, 0);
-	atomic64_set(&priv->tx_ack, 0);
-	atomic64_set(&priv->tx_stale_ack, 0);
-	atomic64_set(&priv->recovery_kicks, 0);
-	INIT_DELAYED_WORK(&priv->recovery_work, ipi_mb_recovery_work);
-	spin_lock_init(&priv->rx_lock);
+	ipi_mbox->dev = dev;
+	spin_lock_init(&ipi_mbox->tx_lock);
 
-	priv->mbox.dev = dev;
-	priv->mbox.ops = &ipi_mb_ops;
-	priv->mbox.chans = priv->chans;
-	priv->mbox.txdone_poll = true;
-	priv->mbox.txpoll_period = 2;
-	ipi_mb_init_generic(priv, rtos_hart_id);
+	ipi_mbox->mbox.dev = dev;
+	ipi_mbox->mbox.ops = &ipi_mbox_ops;
+	ipi_mbox->mbox.chans = ipi_mbox->chans;
+	ipi_mbox->mbox.num_chans = IPI_MBOX_CHANS;
+	ipi_mbox->mbox.of_xlate = ipi_mbox_xlate;
+	ipi_mbox->mbox.txdone_irq = true;
+	ipi_mbox->mbox.txdone_poll = false;
 
-	platform_set_drvdata(pdev, priv);
+	for (i = 0; i < IPI_MBOX_CHANS; i++) {
+		ipi_mbox->mb[i].ipi_mbox = ipi_mbox;
+		ipi_mbox->mb[i].type = i;
+		ipi_mbox->mb[i].rtos_hart_id = rtos_hart_id;
+		ipi_mbox->chans[i].con_priv = &ipi_mbox->mb[i];
+	}
 
-	ret = ipi_mb_init_mem_region(priv, pdev);
+	platform_set_drvdata(pdev, ipi_mbox);
+
+	ret = ipi_mbox_init_mem_region(ipi_mbox, pdev);
 	if (ret)
 		return ret;
 
-	register_ipi_mailbox_handler(ipi_mb_isr);
-	mb_priv = priv;
+	ret = devm_mbox_controller_register(dev, &ipi_mbox->mbox);
+	if (ret)
+		return ret;
 
-	ret = devm_mbox_controller_register(priv->dev, &priv->mbox);
-	if (!ret) {
-		dev_info(dev,
-			 "IPI mailbox ready: base=%px size=%d tx_poll=2ms recovery=%dms\n",
-			 priv->mbase, priv->mem_size, IPI_MB_RECOVERY_MS);
-		mod_delayed_work(system_wq, &priv->recovery_work,
-				 msecs_to_jiffies(IPI_MB_RECOVERY_MS));
-	}
+	ret = register_ipi_mailbox_handler(ipi_mbox_isr, ipi_mbox);
+	if (ret)
+		return ret;
 
-	return ret;
+	dev_info(dev, "IPI mailbox ready: txdone=irq\n");
+
+	return 0;
 }
 
-static int starfive_ipi_mb_remove(struct platform_device *pdev)
+static int quard_ipi_mbox_remove(struct platform_device *pdev)
 {
-	struct ipi_mb_priv *priv = platform_get_drvdata(pdev);
+	struct quard_ipi_mbox *ipi_mbox = platform_get_drvdata(pdev);
 
-	register_ipi_mailbox_handler(NULL);
-	WRITE_ONCE(mb_priv, NULL);
-	cancel_delayed_work_sync(&priv->recovery_work);
+	unregister_ipi_mailbox_handler(ipi_mbox);
 	return 0;
 }
 
@@ -439,13 +286,13 @@ static const struct of_device_id ipi_amp_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, ipi_amp_of_match);
 
-static struct platform_driver starfive_ipi_mb_driver = {
-	.probe = starfive_ipi_mb_probe,
-	.remove = starfive_ipi_mb_remove,
+static struct platform_driver quard_ipi_mbox_driver = {
+	.probe = quard_ipi_mbox_probe,
+	.remove = quard_ipi_mbox_remove,
 	.driver = {
 		.name = "starfive-ipi-mailbox",
 		.of_match_table = ipi_amp_of_match,
 	},
 };
-module_platform_driver(starfive_ipi_mb_driver);
+module_platform_driver(quard_ipi_mbox_driver);
 MODULE_LICENSE("GPL");

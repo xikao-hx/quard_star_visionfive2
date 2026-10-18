@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
+
 # Generic MAILBOX API
 
 obj-$(CONFIG_MAILBOX)		+= mailbox.o
@@ -65,6 +66,7 @@ obj-$(CONFIG_APPLE_MAILBOX)	+= apple-mailbox.o
 
 obj-$(CONFIG_STARFIVE_IPI_MBOX) += starfive_ipi_mailbox.o
 obj-$(CONFIG_QUARD_IPI_MBOX) += quard_ipi_mailbox.o
+CFLAGS_quard_ipi_mailbox.o := -I$(srctree)/../common_inc/bsp
 obj-$(CONFIG_QUARD_MBOX_ROUTER) += quard_mbox_router.o
 CFLAGS_quard_mbox_router.o := -I$(srctree)/../common_inc/bsp
 

@@ -29,7 +29,7 @@ static int sbi_ecall_ipi_handler(unsigned long extid, unsigned long funcid,
 	else if (funcid == SBI_EXT_IPI_SET_AMP_DATA_ADDR)
 		sbi_ipi_set_amp_data_addr(regs->a0);
 	else if (funcid == SBI_EXT_IPI_CLEAR_IPI)
-		sbi_ipi_clear_ext_ipi(regs->a0);
+		ret = sbi_ipi_clear_ext_ipi(regs->a0);
 	else
 		ret = SBI_ENOTSUPP;
 

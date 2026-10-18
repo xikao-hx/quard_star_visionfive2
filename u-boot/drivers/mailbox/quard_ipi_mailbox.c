@@ -9,18 +9,9 @@
 #include <linux/delay.h>
 #include <linux/errno.h>
 
-#define IPI_MB_CHANS             2U
-#define IPI_MB_PAYLOAD_SIZE      28U
-#define IPI_MB_STATE_OFFSET      28U
-#define IPI_MB_CHAN_STRIDE       32U
-#define IPI_MB_REQUIRED_SIZE     (IPI_MB_CHANS * IPI_MB_CHAN_STRIDE)
-#define IPI_MB_TYPE_RX           0U
-#define IPI_MB_TYPE_TX           1U
-#define IPI_MB_STATE_IDLE        0U
-#define IPI_MB_STATE_DATA_READY  1U
-#define IPI_MB_STATE_ACK         2U
-#define IPI_MB_TIMEOUT_MS        5000UL
-#define IPI_MB_RECOVERY_MS       20UL
+#include "quard_ipi_mailbox_protocol.h"
+
+#define IPI_MBOX_TIMEOUT_MS        5000UL
 
 #define SBI_EXT_IPI_SEND_EXT_DOMAIN 0x100U
 #define SBI_EXT_IPI_SET_AMP_DATA    0x101U
@@ -40,14 +31,14 @@ static void ipi_mb_fence(void)
 
 static volatile u8 *ipi_mb_data(struct starfive_ipi_mbox *priv, u32 channel)
 {
-	return (volatile u8 *)(priv->base + channel * IPI_MB_CHAN_STRIDE);
+	return (volatile u8 *)(priv->base + channel * IPI_MBOX_CHAN_STRIDE);
 }
 
 static volatile u32 *ipi_mb_state_ptr(struct starfive_ipi_mbox *priv,
 				      u32 channel)
 {
-	return (volatile u32 *)(priv->base + channel * IPI_MB_CHAN_STRIDE +
-				IPI_MB_STATE_OFFSET);
+	return (volatile u32 *)(priv->base + channel * IPI_MBOX_CHAN_STRIDE +
+				IPI_MBOX_STATE_OFFSET);
 }
 
 static u32 ipi_mb_get_state(volatile u32 *state)
@@ -90,7 +81,7 @@ static void ipi_mb_clear_local(void)
 static int starfive_ipi_xlate(struct mbox_chan *chan,
 			      struct ofnode_phandle_args *args)
 {
-	if (args->args_count != 1 || args->args[0] >= IPI_MB_CHANS)
+	if (args->args_count != 1 || args->args[0] >= IPI_MBOX_CHANS)
 		return -EINVAL;
 	chan->id = args->args[0];
 	return 0;
@@ -105,33 +96,33 @@ static int starfive_ipi_send(struct mbox_chan *chan, const void *message)
 	ulong last_kick;
 	int ret;
 
-	if (chan->id != IPI_MB_TYPE_TX || !message)
+	if (chan->id != IPI_MBOX_TYPE_TX || !message)
 		return -EINVAL;
 	data = ipi_mb_data(priv, chan->id);
 	state = ipi_mb_state_ptr(priv, chan->id);
-	if (ipi_mb_get_state(state) == IPI_MB_STATE_ACK)
-		ipi_mb_set_state(state, IPI_MB_STATE_IDLE);
-	if (ipi_mb_get_state(state) != IPI_MB_STATE_IDLE)
+	if (ipi_mb_get_state(state) == IPI_MBOX_STATE_ACK)
+		ipi_mb_set_state(state, IPI_MBOX_STATE_IDLE);
+	if (ipi_mb_get_state(state) != IPI_MBOX_STATE_IDLE)
 		return -EBUSY;
 
-	memcpy((void *)data, message, IPI_MB_PAYLOAD_SIZE);
-	ipi_mb_set_state(state, IPI_MB_STATE_DATA_READY);
-	ret = ipi_mb_notify(priv, IPI_MB_TYPE_TX);
+	memcpy((void *)data, message, IPI_MBOX_PAYLOAD_SIZE);
+	ipi_mb_set_state(state, IPI_MBOX_STATE_DATA_READY);
+	ret = ipi_mb_notify(priv, IPI_MBOX_TYPE_TX);
 	if (ret) {
-		ipi_mb_set_state(state, IPI_MB_STATE_IDLE);
+		ipi_mb_set_state(state, IPI_MBOX_STATE_IDLE);
 		return ret;
 	}
 
 	start = get_timer(0);
 	last_kick = start;
-	while (get_timer(start) <= IPI_MB_TIMEOUT_MS) {
-		if (ipi_mb_get_state(state) == IPI_MB_STATE_ACK) {
-			ipi_mb_set_state(state, IPI_MB_STATE_IDLE);
+	while (get_timer(start) <= IPI_MBOX_TIMEOUT_MS) {
+		if (ipi_mb_get_state(state) == IPI_MBOX_STATE_ACK) {
+			ipi_mb_set_state(state, IPI_MBOX_STATE_IDLE);
 			ipi_mb_clear_local();
 			return 0;
 		}
-		if (get_timer(last_kick) >= IPI_MB_RECOVERY_MS) {
-			ret = ipi_mb_notify(priv, IPI_MB_TYPE_TX);
+		if (get_timer(last_kick) >= IPI_MBOX_RECOVERY_MS) {
+			ret = ipi_mb_notify(priv, IPI_MBOX_TYPE_TX);
 			if (ret)
 				return ret;
 			last_kick = get_timer(0);
@@ -148,19 +139,19 @@ static int starfive_ipi_recv(struct mbox_chan *chan, void *message)
 	volatile u32 *state;
 	int ret;
 
-	if (chan->id != IPI_MB_TYPE_RX || !message)
+	if (chan->id != IPI_MBOX_TYPE_RX || !message)
 		return -EINVAL;
 	data = ipi_mb_data(priv, chan->id);
 	state = ipi_mb_state_ptr(priv, chan->id);
-	if (ipi_mb_get_state(state) != IPI_MB_STATE_DATA_READY) {
+	if (ipi_mb_get_state(state) != IPI_MBOX_STATE_DATA_READY) {
 		udelay(10);
 		return -ENODATA;
 	}
 
-	memcpy(message, (const void *)data, IPI_MB_PAYLOAD_SIZE);
-	memset((void *)data, 0, IPI_MB_PAYLOAD_SIZE);
-	ipi_mb_set_state(state, IPI_MB_STATE_ACK);
-	ret = ipi_mb_notify(priv, IPI_MB_TYPE_RX);
+	memcpy(message, (const void *)data, IPI_MBOX_PAYLOAD_SIZE);
+	memset((void *)data, 0, IPI_MBOX_PAYLOAD_SIZE);
+	ipi_mb_set_state(state, IPI_MBOX_STATE_ACK);
+	ret = ipi_mb_notify(priv, IPI_MBOX_TYPE_RX);
 	ipi_mb_clear_local();
 	return ret;
 }
@@ -179,7 +170,7 @@ static int starfive_ipi_probe(struct udevice *dev)
 	int ret;
 
 	address = dev_read_addr_size(dev, "reg", &size);
-	if (address == FDT_ADDR_T_NONE || size < IPI_MB_REQUIRED_SIZE)
+	if (address == FDT_ADDR_T_NONE || size < IPI_MBOX_REQUIRED_SIZE)
 		return -EINVAL;
 	priv->base = (uintptr_t)address;
 	ret = dev_read_u32(dev, "rtos-hart-id", &priv->remote_hart);

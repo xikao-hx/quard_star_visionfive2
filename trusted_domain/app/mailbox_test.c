@@ -73,7 +73,7 @@ void mailbox_test_init(void)
 	struct mbox_client tx_client = { 0 };
 	struct mbox_client rx_client = { 0 };
 
-	quard_mailbox_ipi_controller_init(EXTER0_MBOX);
+	quard_mbox_ipi_controller_init(EXTER0_MBOX);
 	ipi_test_rx_semaphore =
 		xSemaphoreCreateBinaryStatic(&ipi_test_rx_semaphore_buf);
 	tx_client.dir = SEND_TYPE;

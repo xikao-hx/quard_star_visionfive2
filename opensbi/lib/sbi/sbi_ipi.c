@@ -177,12 +177,9 @@ void sbi_ipi_set_amp_data_addr(unsigned long addr)
 	amp_data_addr = (void *)addr;
 }
 
-void sbi_ipi_clear_ext_ipi(unsigned long addr)
+int sbi_ipi_clear_ext_ipi(unsigned long addr)
 {
 	unsigned long msg_type;
-
-	if (!amp_data_addr)
-		return;
 
 	/*
 	 * Clear SSIP before consuming the AMP message bits.  If a new AMP IPI
@@ -192,8 +189,13 @@ void sbi_ipi_clear_ext_ipi(unsigned long addr)
 	 * strand its message bit without an interrupt.
 	 */
 	sbi_ipi_clear_smode();
+	if (!amp_data_addr || !addr)
+		return SBI_EINVAL;
+
 	msg_type = atomic_raw_xchg_ulong(amp_data_addr + current_hartid(), 0);
 	*(unsigned long *)addr = msg_type;
+
+	return 0;
 }
 
 static void sbi_ipi_process_halt(struct sbi_scratch *scratch)
